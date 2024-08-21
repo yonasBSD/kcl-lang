@@ -8,7 +8,7 @@ fn main() {
     if env::var("PROTOC").is_err() {
         env::set_var(
             "PROTOC",
-            protoc_bin_vendored::protoc_bin_path().unwrap().as_os_str(),
+            "/usr/local/bin/protoc"
         );
     }
 
