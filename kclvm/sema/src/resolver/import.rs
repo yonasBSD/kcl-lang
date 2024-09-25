@@ -44,9 +44,9 @@ impl<'ctx> Resolver<'ctx> {
                                         range: stmt.get_span_pos(),
                                         style: Style::Line,
                                         message: format!(
-                                            "Cannot import the module {} from {}, attempted import folder with no kcl files",
+                                            "Failed to import the module {} from {}. No KCL files found in the specified folder",
                                             import_stmt.rawpath,
-                                            real_path.to_str().unwrap()
+                                            real_path.to_str().unwrap(),
                                         ),
                                         note: None,
                                         suggested_replacement: None,
@@ -67,14 +67,15 @@ impl<'ctx> Resolver<'ctx> {
                                         suggested_replacement: None,
                                     }],
                                 );
-                                let mut suggestions =
-                                    vec![format!("find more package on 'https://artifacthub.io'")];
+                                let mut suggestions = vec![format!(
+                                    "browse more packages at 'https://artifacthub.io'"
+                                )];
 
                                 if let Ok(pkg_name) = parse_external_pkg_name(pkgpath) {
                                     suggestions.insert(
                                         0,
                                         format!(
-                                            "try 'kcl mod add {}' to download the package not found",
+                                            "try 'kcl mod add {}' to download the missing package",
                                             pkg_name
                                         ),
                                     );
@@ -232,17 +233,39 @@ impl<'ctx> Resolver<'ctx> {
                             }
                             let current_pkgpath = self.ctx.pkgpath.clone();
                             let current_filename = self.ctx.filename.clone();
-                            self.ctx
-                                .ty_ctx
-                                .add_dependencies(&self.ctx.pkgpath, &import_stmt.path.node);
-                            if self.ctx.ty_ctx.is_cyclic() {
-                                self.handler.add_compile_error(
-                                    &format!(
-                                        "There is a circular import reference between module {} and {}",
-                                        self.ctx.pkgpath, import_stmt.path.node,
-                                    ),
-                                    stmt.get_span_pos(),
-                                );
+                            self.ctx.ty_ctx.add_dependencies(
+                                &self.ctx.pkgpath,
+                                &import_stmt.path.node,
+                                stmt.get_span_pos(),
+                            );
+                            if self.ctx.ty_ctx.is_cyclic_from_node(&self.ctx.pkgpath) {
+                                let cycles = self.ctx.ty_ctx.find_cycle_nodes(&self.ctx.pkgpath);
+                                for cycle in cycles {
+                                    let node_names: Vec<String> = cycle
+                                        .iter()
+                                        .map(|idx| {
+                                            if let Some(name) =
+                                                self.ctx.ty_ctx.dep_graph.node_weight(*idx)
+                                            {
+                                                name.clone()
+                                            } else {
+                                                "".to_string()
+                                            }
+                                        })
+                                        .filter(|name| !name.is_empty())
+                                        .collect();
+                                    for node in &cycle {
+                                        if let Some(range) = self.ctx.ty_ctx.get_node_range(node) {
+                                            self.handler.add_compile_error(
+                                                &format!(
+                                                    "There is a circular reference between modules {}",
+                                                    node_names.join(", "),
+                                                ),
+                                                range
+                                            );
+                                        }
+                                    }
+                                }
                             }
                             // Switch pkgpath context
                             if !self.scope_map.contains_key(&import_stmt.path.node) {

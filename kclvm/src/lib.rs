@@ -1,13 +1,13 @@
 #![allow(clippy::missing_safety_doc)]
 
+use kclvm_api::FormatCodeArgs;
 use kclvm_api::{gpyrpc::ExecProgramArgs as ExecProgramOptions, API};
 use kclvm_parser::ParseSession;
 use kclvm_runner::exec_program;
 use kclvm_runner::runner::*;
 pub use kclvm_runtime::*;
 use std::alloc::{alloc, dealloc, Layout};
-use std::ffi::c_char;
-use std::ffi::c_int;
+use std::ffi::{c_char, c_int};
 use std::ffi::{CStr, CString};
 use std::mem;
 use std::process::ExitCode;
@@ -146,6 +146,55 @@ fn intern_run(filename: &str, src: &str) -> Result<String, String> {
     }
 }
 
+/// Exposes a normal kcl fmt function to the WASM host.
+#[no_mangle]
+pub unsafe extern "C" fn kcl_fmt(src_ptr: *const c_char) -> *const c_char {
+    if src_ptr.is_null() {
+        return std::ptr::null();
+    }
+    let src = unsafe { CStr::from_ptr(src_ptr).to_str().unwrap() };
+
+    match intern_fmt(src) {
+        Ok(result) => CString::new(result).unwrap().into_raw(),
+        Err(err) => CString::new(format!("ERROR:{}", err)).unwrap().into_raw(),
+    }
+}
+
+fn intern_fmt(src: &str) -> Result<String, String> {
+    let api = API::default();
+    let args = &FormatCodeArgs {
+        source: src.to_string(),
+    };
+    match api.format_code(args) {
+        Ok(result) => String::from_utf8(result.formatted).map_err(|err| err.to_string()),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+/// Exposes a normal kcl version function to the WASM host.
+#[no_mangle]
+pub unsafe extern "C" fn kcl_version() -> *const c_char {
+    CString::new(kclvm_version::VERSION).unwrap().into_raw()
+}
+
+/// Exposes a normal kcl runtime error function to the WASM host.
+#[no_mangle]
+pub unsafe extern "C" fn kcl_runtime_err(buffer: *mut u8, length: usize) -> isize {
+    KCL_RUNTIME_PANIC_RECORD.with(|e| {
+        let message = &e.borrow().message;
+        if !message.is_empty() {
+            let bytes = message.as_bytes();
+            let copy_len = std::cmp::min(bytes.len(), length);
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer, copy_len);
+            }
+            copy_len as isize
+        } else {
+            0
+        }
+    })
+}
+
 /// Exposes an allocation function to the WASM host.
 ///
 /// _This implementation is copied from wasm-bindgen_
@@ -156,12 +205,12 @@ pub unsafe extern "C" fn kcl_malloc(size: usize) -> *mut u8 {
     if layout.size() > 0 {
         let ptr = alloc(layout);
         if !ptr.is_null() {
-            return ptr;
+            ptr
         } else {
             std::alloc::handle_alloc_error(layout);
         }
     } else {
-        return align as *mut u8;
+        align as *mut u8
     }
 }
 

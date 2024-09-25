@@ -55,14 +55,14 @@ pub fn inlay_hints(file: &str, gs: &GlobalState) -> Option<Vec<InlayHint>> {
 
 #[inline]
 fn generate_inlay_hint(hint: &SymbolHint) -> KCLInlayHint {
-    let (part, position) = get_hint_label(&hint);
+    let (part, position) = get_hint_label(hint);
     KCLInlayHint { position, part }
 }
 
 #[inline]
 fn into_lsp_inlay_hint(hint: &KCLInlayHint) -> InlayHint {
     InlayHint {
-        position: hint.position.clone(),
+        position: hint.position,
         label: lsp_types::InlayHintLabel::LabelParts(vec![hint.part.clone()]),
         kind: None,
         text_edits: None,
@@ -117,5 +117,15 @@ mod tests {
     inlay_hints_test_snapshot!(
         test_function_call_arg_hint,
         "src/test_data/inlay_hints/function_call/function_call.k"
+    );
+
+    inlay_hints_test_snapshot!(
+        test_schema_arg_hint,
+        "src/test_data/inlay_hints/schema_args/schema_args_hint.k"
+    );
+
+    inlay_hints_test_snapshot!(
+        test_config_key_ty,
+        "src/test_data/inlay_hints/config_key/config_key.k"
     );
 }

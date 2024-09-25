@@ -136,6 +136,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrayref"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d151e35f61089500b617991b791fc8bfd237ae50cd5950803758a179b41e67a"
+
+[[package]]
 name = "arrayvec"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -239,6 +245,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "blake3"
+version = "1.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d82033247fd8e890df8f740e407ad4d038debb9eb1f40533fffb32e7d17dc6f7"
+dependencies = [
+ "arrayref",
+ "arrayvec",
+ "cc",
+ "cfg-if 1.0.0",
+ "constant_time_eq",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -320,9 +339,12 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cc"
-version = "1.1.6"
+version = "1.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2aba8f4e9906c7ce3c73463f62a7f0c65183ada1a2d47e397cc8810827f9694f"
+checksum = "57b6a275aa2903740dc87da01c62040406b8812552e97129a63ea8850a17c6e6"
+dependencies = [
+ "shlex",
+]
 
 [[package]]
 name = "cfg-if"
@@ -472,6 +494,12 @@ name = "const_fn"
 version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "373e9fafaa20882876db20562275ff58d50e0caa2590077fe7ce7bef90211d0d"
+
+[[package]]
+name = "constant_time_eq"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 
 [[package]]
 name = "core-foundation-sys"
@@ -751,6 +779,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59f8e79d1fbf76bdfbde321e902714bf6c49df88a7dda6fc682fc2979226962d"
 
 [[package]]
+name = "dns-lookup"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5766087c2235fec47fafa4cfecc81e494ee679d0fd4a59887ea0919bfb0e4fc"
+dependencies = [
+ "cfg-if 1.0.0",
+ "libc",
+ "socket2",
+ "windows-sys 0.48.0",
+]
+
+[[package]]
 name = "either"
 version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -770,6 +810,70 @@ name = "encode_unicode"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a357d28ed41a50f9c765dbfe56cbc04a64e53e5fc58ba79fbc34c10ef3df831f"
+
+[[package]]
+name = "encoding"
+version = "0.2.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b0d943856b990d12d3b55b359144ff341533e516d94098b1d3fc1ac666d36ec"
+dependencies = [
+ "encoding-index-japanese",
+ "encoding-index-korean",
+ "encoding-index-simpchinese",
+ "encoding-index-singlebyte",
+ "encoding-index-tradchinese",
+]
+
+[[package]]
+name = "encoding-index-japanese"
+version = "1.20141219.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04e8b2ff42e9a05335dbf8b5c6f7567e5591d0d916ccef4e0b1710d32a0d0c91"
+dependencies = [
+ "encoding_index_tests",
+]
+
+[[package]]
+name = "encoding-index-korean"
+version = "1.20141219.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4dc33fb8e6bcba213fe2f14275f0963fd16f0a02c878e3095ecfdf5bee529d81"
+dependencies = [
+ "encoding_index_tests",
+]
+
+[[package]]
+name = "encoding-index-simpchinese"
+version = "1.20141219.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d87a7194909b9118fc707194baa434a4e3b0fb6a5a757c73c3adb07aa25031f7"
+dependencies = [
+ "encoding_index_tests",
+]
+
+[[package]]
+name = "encoding-index-singlebyte"
+version = "1.20141219.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3351d5acffb224af9ca265f435b859c7c01537c0849754d3db3fdf2bfe2ae84a"
+dependencies = [
+ "encoding_index_tests",
+]
+
+[[package]]
+name = "encoding-index-tradchinese"
+version = "1.20141219.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd0e20d5688ce3cab59eb3ef3a2083a5c77bf496cb798dc6fcdb75f323890c18"
+dependencies = [
+ "encoding_index_tests",
+]
+
+[[package]]
+name = "encoding_index_tests"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a246d82be1c9d791c5dfde9a2bd045fc3cbba3fa2b11ad558f27d01712f00569"
 
 [[package]]
 name = "enquote"
@@ -1195,6 +1299,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostname"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9c7c7c8ac16c798734b8a24560c1362120597c40d5e1459f09498f8f6c8f2ba"
+dependencies = [
+ "cfg-if 1.0.0",
+ "libc",
+ "windows",
+]
+
+[[package]]
 name = "http"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1592,7 +1707,7 @@ dependencies = [
 
 [[package]]
 name = "kcl-language-server"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1636,7 +1751,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "kclvm-api",
  "kclvm-ast",
@@ -1658,7 +1773,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-api"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1698,7 +1813,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-ast"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "compiler_base_span",
  "kclvm-error",
@@ -1713,7 +1828,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-ast-pretty"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "compiler_base_macros",
  "compiler_base_session",
@@ -1727,7 +1842,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-cmd"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1745,7 +1860,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-compiler"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "ahash",
  "bit-set",
@@ -1765,7 +1880,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-config"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1788,11 +1903,10 @@ dependencies = [
 
 [[package]]
 name = "kclvm-driver"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "flate2",
- "glob",
  "indexmap 2.2.6",
  "kclvm-ast",
  "kclvm-config",
@@ -1812,7 +1926,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-error"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "annotate-snippets",
  "anyhow",
@@ -1833,7 +1947,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-evaluator"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "generational-arena",
@@ -1850,7 +1964,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-lexer"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "expect-test",
  "kclvm-error",
@@ -1860,7 +1974,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-loader"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "indexmap 1.9.3",
@@ -1876,7 +1990,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-macros"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1886,7 +2000,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-parser"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "bstr",
@@ -1897,6 +2011,7 @@ dependencies = [
  "either",
  "enquote",
  "expect-test",
+ "glob",
  "indexmap 1.9.3",
  "insta",
  "kclvm-ast",
@@ -1907,6 +2022,7 @@ dependencies = [
  "kclvm-span",
  "kclvm-utils",
  "num-bigint",
+ "parking_lot 0.12.3",
  "petgraph",
  "regex",
  "rustc_lexer",
@@ -1918,7 +2034,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-query"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "compiler_base_macros",
@@ -1939,7 +2055,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-runner"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "cc",
@@ -1974,16 +2090,21 @@ dependencies = [
 
 [[package]]
 name = "kclvm-runtime"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "ahash",
+ "anyhow",
  "base64 0.13.1",
+ "blake3",
  "bstr",
  "chrono",
+ "dns-lookup",
+ "encoding",
  "fancy-regex",
  "generational-arena",
  "glob",
  "handlebars",
+ "hostname",
  "indexmap 1.9.3",
  "itertools",
  "kclvm_runtime_internal_macros",
@@ -2007,7 +2128,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-sema"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -2042,7 +2163,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-span"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "compiler_base_span",
  "kclvm-macros",
@@ -2052,7 +2173,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-tools"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "compiler_base_session",
@@ -2085,7 +2206,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-utils"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "fslock",
@@ -2094,7 +2215,7 @@ dependencies = [
 
 [[package]]
 name = "kclvm-version"
-version = "0.10.0-beta.1"
+version = "0.10.0"
 dependencies = [
  "vergen-gitcl",
 ]
@@ -2217,9 +2338,9 @@ checksum = "a7a70ba024b9dc04c27ea2f0c0548feb474ec5c54bba33a7f72f873a39d07b24"
 
 [[package]]
 name = "lsp-server"
-version = "0.7.6"
+version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "248f65b78f6db5d8e1b1604b4098a28b43d21a8eb1deeca22b1c421b276c7095"
+checksum = "550446e84739dcaf6d48a4a093973850669e13e8a34d8f8d64851041be267cd9"
 dependencies = [
  "crossbeam-channel",
  "log",
@@ -3692,6 +3813,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "shlex"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
+
+[[package]]
 name = "signal-hook-registry"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4709,6 +4836,16 @@ name = "winapi-x86_64-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
+
+[[package]]
+name = "windows"
+version = "0.52.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e48a53791691ab099e5e2ad123536d0fff50652600abaf43bbf952894110d0be"
+dependencies = [
+ "windows-core",
+ "windows-targets 0.52.6",
+]
 
 [[package]]
 name = "windows-core"

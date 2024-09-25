@@ -17,6 +17,7 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
                                 flags: STR,
                             },
                             has_default: false,
+                            default_value: None,
                             range: (
                                 Position {
                                     filename: "",
@@ -38,6 +39,7 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
                                 flags: STR,
                             },
                             has_default: true,
+                            default_value: None,
                             range: (
                                 Position {
                                     filename: "",
@@ -59,6 +61,7 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
                                 flags: BOOL,
                             },
                             has_default: true,
+                            default_value: None,
                             range: (
                                 Position {
                                     filename: "",
@@ -80,6 +83,7 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
                                 flags: ANY,
                             },
                             has_default: true,
+                            default_value: None,
                             range: (
                                 Position {
                                     filename: "",
@@ -101,6 +105,7 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
                                 flags: STR,
                             },
                             has_default: true,
+                            default_value: None,
                             range: (
                                 Position {
                                     filename: "",
@@ -182,6 +187,7 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
                                 flags: STR,
                             },
                             has_default: false,
+                            default_value: None,
                             range: (
                                 Position {
                                     filename: "",
@@ -203,6 +209,7 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
                                 flags: STR,
                             },
                             has_default: true,
+                            default_value: None,
                             range: (
                                 Position {
                                     filename: "",
@@ -224,6 +231,7 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
                                 flags: BOOL,
                             },
                             has_default: true,
+                            default_value: None,
                             range: (
                                 Position {
                                     filename: "",
@@ -245,6 +253,7 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
                                 flags: ANY,
                             },
                             has_default: true,
+                            default_value: None,
                             range: (
                                 Position {
                                     filename: "",
@@ -266,6 +275,7 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
                                 flags: STR,
                             },
                             has_default: true,
+                            default_value: None,
                             range: (
                                 Position {
                                     filename: "",
@@ -383,6 +393,7 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
                                 flags: STR,
                             },
                             has_default: false,
+                            default_value: None,
                             range: (
                                 Position {
                                     filename: "",
@@ -404,6 +415,7 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
                                 flags: STR,
                             },
                             has_default: true,
+                            default_value: None,
                             range: (
                                 Position {
                                     filename: "",
@@ -425,6 +437,7 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
                                 flags: BOOL,
                             },
                             has_default: true,
+                            default_value: None,
                             range: (
                                 Position {
                                     filename: "",
@@ -446,6 +459,7 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
                                 flags: ANY,
                             },
                             has_default: true,
+                            default_value: None,
                             range: (
                                 Position {
                                     filename: "",
@@ -467,6 +481,7 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
                                 flags: STR,
                             },
                             has_default: true,
+                            default_value: None,
                             range: (
                                 Position {
                                     filename: "",
@@ -564,27 +579,6 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
         attrs: [
             SymbolRef {
                 id: Index {
-                    index: 138,
-                    generation: 0,
-                },
-                kind: Function,
-            },
-            SymbolRef {
-                id: Index {
-                    index: 139,
-                    generation: 0,
-                },
-                kind: Function,
-            },
-            SymbolRef {
-                id: Index {
-                    index: 140,
-                    generation: 0,
-                },
-                kind: Function,
-            },
-            SymbolRef {
-                id: Index {
                     index: 141,
                     generation: 0,
                 },
@@ -761,6 +755,27 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
             SymbolRef {
                 id: Index {
                     index: 166,
+                    generation: 0,
+                },
+                kind: Function,
+            },
+            SymbolRef {
+                id: Index {
+                    index: 167,
+                    generation: 0,
+                },
+                kind: Function,
+            },
+            SymbolRef {
+                id: Index {
+                    index: 168,
+                    generation: 0,
+                },
+                kind: Function,
+            },
+            SymbolRef {
+                id: Index {
+                    index: 169,
                     generation: 0,
                 },
                 kind: Function,
@@ -806,27 +821,6 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
         attrs: [
             SymbolRef {
                 id: Index {
-                    index: 138,
-                    generation: 0,
-                },
-                kind: Function,
-            },
-            SymbolRef {
-                id: Index {
-                    index: 139,
-                    generation: 0,
-                },
-                kind: Function,
-            },
-            SymbolRef {
-                id: Index {
-                    index: 140,
-                    generation: 0,
-                },
-                kind: Function,
-            },
-            SymbolRef {
-                id: Index {
                     index: 141,
                     generation: 0,
                 },
@@ -1003,6 +997,27 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
             SymbolRef {
                 id: Index {
                     index: 166,
+                    generation: 0,
+                },
+                kind: Function,
+            },
+            SymbolRef {
+                id: Index {
+                    index: 167,
+                    generation: 0,
+                },
+                kind: Function,
+            },
+            SymbolRef {
+                id: Index {
+                    index: 168,
+                    generation: 0,
+                },
+                kind: Function,
+            },
+            SymbolRef {
+                id: Index {
+                    index: 169,
                     generation: 0,
                 },
                 kind: Function,
@@ -1048,27 +1063,6 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
         attrs: [
             SymbolRef {
                 id: Index {
-                    index: 138,
-                    generation: 0,
-                },
-                kind: Function,
-            },
-            SymbolRef {
-                id: Index {
-                    index: 139,
-                    generation: 0,
-                },
-                kind: Function,
-            },
-            SymbolRef {
-                id: Index {
-                    index: 140,
-                    generation: 0,
-                },
-                kind: Function,
-            },
-            SymbolRef {
-                id: Index {
                     index: 141,
                     generation: 0,
                 },
@@ -1245,6 +1239,27 @@ expression: "format!(\"{:#?}\", p.symbols.values())"
             SymbolRef {
                 id: Index {
                     index: 166,
+                    generation: 0,
+                },
+                kind: Function,
+            },
+            SymbolRef {
+                id: Index {
+                    index: 167,
+                    generation: 0,
+                },
+                kind: Function,
+            },
+            SymbolRef {
+                id: Index {
+                    index: 168,
+                    generation: 0,
+                },
+                kind: Function,
+            },
+            SymbolRef {
+                id: Index {
+                    index: 169,
                     generation: 0,
                 },
                 kind: Function,

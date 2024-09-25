@@ -15,7 +15,7 @@ use crate::{
             SymbolHintKind, SymbolRef, SymbolSemanticInfo, UnresolvedSymbol, ValueSymbol,
         },
     },
-    ty::{self, Type, TypeKind, SCHEMA_MEMBER_FUNCTIONS},
+    ty::{Parameter, Type, TypeKind, SCHEMA_MEMBER_FUNCTIONS},
 };
 
 use super::AdvancedResolver;
@@ -191,7 +191,7 @@ impl<'ctx> MutSelfTypedResultWalker<'ctx> for AdvancedResolver<'ctx> {
             .unwrap_or(import_stmt.path.clone())
             .get_span_pos();
 
-        let mut unresolved = UnresolvedSymbol::new(
+        let unresolved = UnresolvedSymbol::new(
             import_stmt.path.node.clone(),
             start_pos,
             end_pos,
@@ -206,12 +206,14 @@ impl<'ctx> MutSelfTypedResultWalker<'ctx> for AdvancedResolver<'ctx> {
             Some(symbol) => symbol,
             None => return Ok(None),
         };
-        unresolved.def = Some(package_symbol);
         let unresolved_ref = self.gs.get_symbols_mut().alloc_unresolved_symbol(
             unresolved,
             self.ctx.get_node_key(&ast_id),
             self.ctx.current_pkgpath.clone().unwrap(),
         );
+        self.gs
+            .get_symbols_mut()
+            .set_def_and_ref(package_symbol, unresolved_ref);
         self.gs
             .get_symbols_mut()
             .symbols_info
@@ -336,9 +338,15 @@ impl<'ctx> MutSelfTypedResultWalker<'ctx> for AdvancedResolver<'ctx> {
         }
         if let Some(index_signature) = &schema_stmt.index_signature {
             if let Some(key_name) = &index_signature.node.key_name {
-                let (start, end) = index_signature.get_span_pos();
+                let (start, end) = key_name.get_span_pos();
                 let value = self.gs.get_symbols_mut().alloc_value_symbol(
-                    ValueSymbol::new(key_name.clone(), start, end, Some(schema_symbol), false),
+                    ValueSymbol::new(
+                        key_name.node.clone(),
+                        start,
+                        end,
+                        Some(schema_symbol),
+                        false,
+                    ),
                     self.ctx.get_node_key(&index_signature.id),
                     self.ctx.current_pkgpath.clone().unwrap(),
                 );
@@ -356,13 +364,12 @@ impl<'ctx> MutSelfTypedResultWalker<'ctx> for AdvancedResolver<'ctx> {
 
                 self.gs
                     .get_scopes_mut()
-                    .add_def_to_scope(cur_scope, key_name.clone(), value);
-
-                self.walk_type_expr(Some(&index_signature.node.value_ty))?;
-                if let Some(value) = &index_signature.node.value {
-                    self.expr(value)?;
-                };
+                    .add_def_to_scope(cur_scope, key_name.node.clone(), value);
             }
+            self.walk_type_expr(Some(&index_signature.node.value_ty))?;
+            if let Some(value) = &index_signature.node.value {
+                self.expr(value)?;
+            };
             last_end_pos = index_signature.get_end_pos();
         }
 
@@ -509,7 +516,7 @@ impl<'ctx> MutSelfTypedResultWalker<'ctx> for AdvancedResolver<'ctx> {
                     .get(&self.ctx.get_node_key(ast_id))
                     .map(|ty| ty.clone());
                 symbol.hint = ty.as_ref().map(|ty| SymbolHint {
-                    kind: SymbolHintKind::TypeHint(ty.ty_str()),
+                    kind: SymbolHintKind::TypeHint(ty.ty_hint()),
                     pos: symbol.get_range().1,
                 });
                 symbol.sema_info = SymbolSemanticInfo { ty, doc: None };
@@ -627,19 +634,23 @@ impl<'ctx> MutSelfTypedResultWalker<'ctx> for AdvancedResolver<'ctx> {
 
             let (start_pos, end_pos): Range = name.get_span_pos();
             let ast_id = name.id.clone();
-            let mut unresolved = UnresolvedSymbol::new(
+            let unresolved = UnresolvedSymbol::new(
                 name.node.clone(),
                 start_pos,
                 end_pos,
                 None,
                 self.ctx.is_type_expr,
             );
-            unresolved.def = Some(def_symbol_ref);
             let unresolved_ref = self.gs.get_symbols_mut().alloc_unresolved_symbol(
                 unresolved,
                 self.ctx.get_node_key(&ast_id),
                 self.ctx.current_pkgpath.clone().unwrap(),
             );
+
+            self.gs
+                .get_symbols_mut()
+                .set_def_and_ref(def_symbol_ref, unresolved_ref);
+
             let cur_scope = *self.ctx.scopes.last().unwrap();
             self.gs
                 .get_scopes_mut()
@@ -686,7 +697,12 @@ impl<'ctx> MutSelfTypedResultWalker<'ctx> for AdvancedResolver<'ctx> {
                                 .get_scopes_mut()
                                 .set_owner_to_scope(*cur_scope, owner);
                         }
-                        self.do_arguments_symbol_resolve(&call_expr.args, &call_expr.keywords)?;
+                        self.do_arguments_symbol_resolve_with_hint(
+                            &call_expr.args,
+                            &call_expr.keywords,
+                            &schema_ty.func.params,
+                            true,
+                        )?;
 
                         self.leave_scope();
                     }
@@ -709,8 +725,8 @@ impl<'ctx> MutSelfTypedResultWalker<'ctx> for AdvancedResolver<'ctx> {
                     self.do_arguments_symbol_resolve_with_hint(
                         &call_expr.args,
                         &call_expr.keywords,
+                        &func_ty.params,
                         true,
-                        &func_ty,
                     )?;
                     self.leave_scope();
                 }
@@ -1034,33 +1050,38 @@ impl<'ctx> AdvancedResolver<'ctx> {
                 .borrow()
                 .get(&self.ctx.get_node_key(&expr.id))
             {
-                Some(ty) => {
-                    if let ast::Expr::Missing(_) = expr.node {
-                        return Ok(None);
-                    }
-                    let (_, end) = expr.get_span_pos();
-                    let mut expr_symbol = ExpressionSymbol::new(
-                        format!("@{}", expr.node.get_expr_name()),
-                        end.clone(),
-                        end,
-                        None,
-                    );
-                    expr_symbol.sema_info.ty = if matches!(&expr.node, | ast::Expr::Call(_)) {
-                        if let TypeKind::Function(func_ty) = &ty.kind {
-                            Some(func_ty.return_ty.clone())
+                Some(ty) => match expr.node {
+                    ast::Expr::Missing(_)
+                    | ast::Expr::Binary(_)
+                    | ast::Expr::CompClause(_)
+                    | ast::Expr::Keyword(_)
+                    | ast::Expr::Arguments(_)
+                    | ast::Expr::Compare(_) => return Ok(None),
+                    _ => {
+                        let (_, end) = expr.get_span_pos();
+                        let mut expr_symbol = ExpressionSymbol::new(
+                            format!("@{}", expr.node.get_expr_name()),
+                            end.clone(),
+                            end,
+                            None,
+                        );
+                        expr_symbol.sema_info.ty = if matches!(&expr.node, | ast::Expr::Call(_)) {
+                            if let TypeKind::Function(func_ty) = &ty.kind {
+                                Some(func_ty.return_ty.clone())
+                            } else {
+                                Some(ty.clone())
+                            }
                         } else {
                             Some(ty.clone())
-                        }
-                    } else {
-                        Some(ty.clone())
-                    };
+                        };
 
-                    Ok(self.gs.get_symbols_mut().alloc_expression_symbol(
-                        expr_symbol,
-                        self.ctx.get_node_key(&expr.id),
-                        self.ctx.current_pkgpath.clone().unwrap(),
-                    ))
-                }
+                        Ok(self.gs.get_symbols_mut().alloc_expression_symbol(
+                            expr_symbol,
+                            self.ctx.get_node_key(&expr.id),
+                            self.ctx.current_pkgpath.clone().unwrap(),
+                        ))
+                    }
+                },
                 None => Ok(None),
             },
             res => res,
@@ -1125,6 +1146,7 @@ impl<'ctx> AdvancedResolver<'ctx> {
         }
         match first_symbol {
             Some(symbol_ref) => {
+                let mut ret_symbol = symbol_ref.clone();
                 let (start_pos, end_pos): Range = first_name.get_span_pos();
                 let def_symbol = self
                     .gs
@@ -1168,6 +1190,7 @@ impl<'ctx> AdvancedResolver<'ctx> {
                                             name,
                                             first_unresolved_ref,
                                         );
+                                        ret_symbol = first_unresolved_ref;
                                     }
                                 }
                             }
@@ -1178,6 +1201,11 @@ impl<'ctx> AdvancedResolver<'ctx> {
                 }
 
                 if def_start_pos != start_pos || def_end_pos != end_pos {
+                    self.gs
+                        .get_symbols_mut()
+                        .set_def_and_ref(symbol_ref, first_unresolved_ref);
+
+                    let cur_scope = *self.ctx.scopes.last().unwrap();
                     self.gs
                         .get_scopes_mut()
                         .add_ref_to_scope(cur_scope, first_unresolved_ref);
@@ -1214,7 +1242,6 @@ impl<'ctx> AdvancedResolver<'ctx> {
                             None,
                             self.ctx.is_type_expr,
                         );
-                        unresolved.def = Some(def_symbol_ref);
 
                         unresolved.sema_info = SymbolSemanticInfo {
                             ty: self
@@ -1231,6 +1258,10 @@ impl<'ctx> AdvancedResolver<'ctx> {
                             self.ctx.get_node_key(&ast_id),
                             self.ctx.current_pkgpath.clone().unwrap(),
                         );
+
+                        self.gs
+                            .get_symbols_mut()
+                            .set_def_and_ref(def_symbol_ref, unresolved_ref);
 
                         let cur_scope = *self.ctx.scopes.last().unwrap();
                         self.gs
@@ -1251,7 +1282,7 @@ impl<'ctx> AdvancedResolver<'ctx> {
                         }
                     }
                 }
-                Ok(Some(symbol_ref))
+                Ok(Some(ret_symbol))
             }
             None => {
                 if maybe_def {
@@ -1583,7 +1614,7 @@ impl<'ctx> AdvancedResolver<'ctx> {
                     .map(|ty| ty.clone());
                 if with_hint {
                     symbol.hint = ty.as_ref().map(|ty| SymbolHint {
-                        kind: SymbolHintKind::TypeHint(ty.ty_str()),
+                        kind: SymbolHintKind::TypeHint(ty.ty_hint()),
                         pos: symbol.get_range().1,
                     });
                 }
@@ -1652,7 +1683,7 @@ impl<'ctx> AdvancedResolver<'ctx> {
                     .map(|ty| ty.clone());
                 if with_hint {
                     symbol.hint = ty.as_ref().map(|ty| SymbolHint {
-                        kind: SymbolHintKind::TypeHint(ty.ty_str()),
+                        kind: SymbolHintKind::TypeHint(ty.ty_hint()),
                         pos: symbol.get_range().1,
                     });
                 }
@@ -1731,7 +1762,7 @@ impl<'ctx> AdvancedResolver<'ctx> {
                 Some(ty) => {
                     let (_, end) = ty_node.get_span_pos();
                     let mut expr_symbol =
-                        ExpressionSymbol::new(format!("@{}", ty.ty_str()), end.clone(), end, None);
+                        ExpressionSymbol::new(format!("@{}", ty.ty_hint()), end.clone(), end, None);
 
                     expr_symbol.sema_info.ty = Some(ty.clone());
                     self.gs.get_symbols_mut().alloc_expression_symbol(
@@ -1785,13 +1816,13 @@ impl<'ctx> AdvancedResolver<'ctx> {
         &mut self,
         args: &'ctx [ast::NodeRef<ast::Expr>],
         kwargs: &'ctx [ast::NodeRef<ast::Keyword>],
+        params: &[Parameter],
         with_hint: bool,
-        func_ty: &ty::FunctionType,
     ) -> anyhow::Result<()> {
-        if func_ty.params.is_empty() {
+        if params.is_empty() {
             self.do_arguments_symbol_resolve(args, kwargs)?;
         } else {
-            for (arg, param) in args.iter().zip(func_ty.params.iter()) {
+            for (arg, param) in args.iter().zip(params.iter()) {
                 self.expr(arg)?;
 
                 if with_hint {
@@ -1906,7 +1937,36 @@ impl<'ctx> AdvancedResolver<'ctx> {
 
             if let Some(key) = &entry.node.key {
                 self.ctx.maybe_def = true;
-                self.expr(key)?;
+                if let Some(symbol_ref) = self.expr(key)? {
+                    let config_key_symbol =
+                        self.gs.get_symbols().unresolved.get(symbol_ref.get_id());
+                    let hint: Option<SymbolHint> =
+                        if let Some(config_key_symbol) = config_key_symbol {
+                            match config_key_symbol.get_definition() {
+                                Some(def_ref) => match self.gs.get_symbols().get_symbol(def_ref) {
+                                    Some(def_symbol) => {
+                                        let ty = def_symbol.get_sema_info().ty.clone();
+                                        ty.as_ref().map(|ty| SymbolHint {
+                                            kind: SymbolHintKind::TypeHint(ty.ty_hint()),
+                                            pos: config_key_symbol.get_range().1.clone(),
+                                        })
+                                    }
+                                    None => None,
+                                },
+                                None => None,
+                            }
+                        } else {
+                            None
+                        };
+                    if let Some(config_key_symbol_mut_ref) = self
+                        .gs
+                        .get_symbols_mut()
+                        .unresolved
+                        .get_mut(symbol_ref.get_id())
+                    {
+                        config_key_symbol_mut_ref.hint = hint;
+                    }
+                }
                 self.ctx.maybe_def = false;
             }
         }

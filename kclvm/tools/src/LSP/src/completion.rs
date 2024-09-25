@@ -76,7 +76,7 @@ pub(crate) struct KCLCompletionItem {
 }
 
 /// Computes completions at the given position.
-pub(crate) fn completion(
+pub fn completion(
     trigger_character: Option<char>,
     program: &Program,
     pos: &KCLPos,
@@ -476,7 +476,7 @@ fn completion_import_stmt(
     if let Some(node) = program.pos_to_stmt(line_start_pos) {
         if let Stmt::Import(_) = node.node {
             completions.extend(completion_import_builtin_pkg());
-            completions.extend(completion_import_internal_pkg(&program, &line_start_pos));
+            completions.extend(completion_import_internal_pkg(program, line_start_pos));
             completions.extend(completion_import_external_pkg(metadata));
         }
     }
@@ -558,7 +558,6 @@ fn completion_import_external_pkg(metadata: Option<Metadata>) -> IndexSet<KCLCom
         Some(metadata) => metadata
             .packages
             .keys()
-            .into_iter()
             .map(|name| KCLCompletionItem {
                 label: name.to_string(),
                 detail: None,
@@ -2150,6 +2149,14 @@ mod tests {
         "src/test_data/completion_test/dot/schema_attr_ty/schema_attr_ty.k",
         10,
         15,
+        Some('.')
+    );
+
+    completion_label_test_snapshot!(
+        complete_after_compare_expr_1,
+        "src/test_data/completion_test/dot/special_expr/compare.k",
+        2,
+        23,
         Some('.')
     );
 }

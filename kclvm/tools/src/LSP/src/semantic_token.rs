@@ -26,7 +26,7 @@ pub(crate) struct KCLSemanticToken {
     pub length: u32,
 }
 
-pub(crate) fn semantic_tokens_full(file: &str, gs: &GlobalState) -> Option<SemanticTokensResult> {
+pub fn semantic_tokens_full(file: &str, gs: &GlobalState) -> Option<SemanticTokensResult> {
     let mut kcl_tokens: Vec<KCLSemanticToken> = vec![];
     let sema_db = gs.get_sema_db();
     if let Some(file_sema) = sema_db.get_file_sema(file) {
@@ -106,40 +106,47 @@ pub(crate) fn kcl_semantic_tokens_to_semantic_tokens(
             a.start.line.cmp(&b.start.line)
         }
     });
-    let mut pre_line = 0;
-    let mut pre_start = 0;
 
-    let semantic_tokens: Vec<SemanticToken> = tokens
-        .iter()
-        .map(|obj| {
-            // ref: https://github.com/microsoft/vscode-extension-samples/blob/5ae1f7787122812dcc84e37427ca90af5ee09f14/semantic-tokens-sample/vscode.proposed.d.ts#L71
-            // A file can contain many tokens, perhaps even hundreds of thousands of tokens. Therefore, to improve
-            // the memory consumption around describing semantic tokens, we have decided to avoid allocating an object
-            // for each token and we represent tokens from a file as an array of integers. Furthermore, the position
-            // of each token is expressed relative to the token before it because most tokens remain stable relative to
-            // each other when edits are made in a file.
-            let line = obj.start.line - 1;
-            let start = obj.start.column.unwrap_or(0);
+    // ref: https://github.com/microsoft/vscode-extension-samples/blob/5ae1f7787122812dcc84e37427ca90af5ee09f14/semantic-tokens-sample/vscode.proposed.d.ts#L71
+    // A file can contain many tokens, perhaps even hundreds of thousands of tokens. Therefore, to improve
+    // the memory consumption around describing semantic tokens, we have decided to avoid allocating an object
+    // for each token and we represent tokens from a file as an array of integers. Furthermore, the position
+    // of each token is expressed relative to the token before it because most tokens remain stable relative to
+    // each other when edits are made in a file.
 
-            let delta_line: u32 = (line - pre_line) as u32;
-            let delta_start: u32 = (if delta_line == 0 {
-                start - pre_start
-            } else {
-                start
-            }) as u32;
-            let length = obj.length;
-            let ret = SemanticToken {
+    let mut semantic_tokens: Vec<SemanticToken> = vec![];
+    if tokens.is_empty() {
+        return semantic_tokens;
+    }
+    let first_token = tokens.first().unwrap();
+
+    semantic_tokens.push(SemanticToken {
+        delta_line: (first_token.start.line - 1) as u32,
+        delta_start: (first_token.start.column.unwrap_or(0)) as u32,
+        length: first_token.length,
+        token_type: first_token.kind,
+        token_modifiers_bitset: 0,
+    });
+
+    for token_tuple in tokens.windows(2) {
+        let first_token = &token_tuple[0];
+        let second_token = &token_tuple[1];
+        let delta_line = (second_token.start.line - first_token.start.line) as u32;
+        let delta_start = (if delta_line == 0 {
+            second_token.start.column.unwrap_or(0) - first_token.start.column.unwrap_or(0)
+        } else {
+            second_token.start.column.unwrap_or(0)
+        }) as u32;
+        if delta_line != 0 || delta_start != 0 {
+            semantic_tokens.push(SemanticToken {
                 delta_line,
                 delta_start,
-                length,
-                token_type: obj.kind,
+                length: second_token.length,
+                token_type: second_token.kind,
                 token_modifiers_bitset: 0,
-            };
-            pre_line = line;
-            pre_start = start;
-            ret
-        })
-        .collect();
+            });
+        }
+    }
     semantic_tokens
 }
 
@@ -189,6 +196,8 @@ mod tests {
                     // (1, 0, 1, 0),  // b
                     // (0, 4, 4, 8),  // func
                     // (0, 5, 1, 0)   // x
+                    // (2, 7, 8, 1)   // Manifest
+                    // (1, 5, 4, 0)]  // name
                     insta::assert_snapshot!(format!("{:?}", get));
                 }
                 lsp_types::SemanticTokensResult::Partial(_) => {

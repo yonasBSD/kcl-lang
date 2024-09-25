@@ -678,7 +678,7 @@ impl SchemaStmt {
 /// ```
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct SchemaIndexSignature {
-    pub key_name: Option<String>,
+    pub key_name: Option<NodeRef<String>>,
     pub value: Option<NodeRef<Expr>>,
     pub any_other: bool,
     pub key_ty: NodeRef<Type>,
@@ -1173,6 +1173,33 @@ pub struct Subscript {
     pub step: Option<NodeRef<Expr>>,
     pub ctx: ExprContext,
     pub has_question: bool,
+}
+
+impl Subscript {
+    /// Whether the subscript is the a[1] or a[-1] form.
+    pub fn has_name_and_constant_index(&self) -> bool {
+        if let Expr::Identifier(_) = &self.value.node {
+            if let Some(index_node) = &self.index {
+                // Positive index constant
+                if let Expr::NumberLit(number) = &index_node.node {
+                    matches!(number.value, NumberLitValue::Int(_))
+                } else if let Expr::Unary(unary_expr) = &index_node.node {
+                    // Negative index constant
+                    if let Expr::NumberLit(number) = &unary_expr.operand.node {
+                        matches!(number.value, NumberLitValue::Int(_))
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
 }
 
 /// Keyword, e.g.

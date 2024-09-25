@@ -2,7 +2,7 @@ use crossbeam_channel::after;
 use crossbeam_channel::select;
 use indexmap::IndexSet;
 use kclvm_ast::MAIN_PKG;
-use kclvm_config::workfile::WorkSpace;
+use kclvm_driver::lookup_compile_workspace;
 use kclvm_driver::toolchain;
 use kclvm_driver::toolchain::Metadata;
 use kclvm_driver::WorkSpaceKind;
@@ -21,8 +21,6 @@ use lsp_types::CompletionResponse;
 use lsp_types::CompletionTriggerKind;
 use lsp_types::DocumentFormattingParams;
 use lsp_types::DocumentSymbolParams;
-use lsp_types::FileChangeType;
-use lsp_types::FileEvent;
 use lsp_types::GotoDefinitionParams;
 use lsp_types::GotoDefinitionResponse;
 use lsp_types::Hover;
@@ -30,15 +28,18 @@ use lsp_types::HoverContents;
 use lsp_types::HoverParams;
 use lsp_types::InitializeParams;
 use lsp_types::MarkedString;
+use lsp_types::PartialResultParams;
 use lsp_types::PublishDiagnosticsParams;
 use lsp_types::ReferenceContext;
 use lsp_types::ReferenceParams;
 use lsp_types::RenameParams;
+use lsp_types::SemanticTokensParams;
 use lsp_types::TextDocumentIdentifier;
 use lsp_types::TextDocumentItem;
 use lsp_types::TextDocumentPositionParams;
 use lsp_types::TextEdit;
 use lsp_types::Url;
+use lsp_types::WorkDoneProgressParams;
 use lsp_types::WorkspaceEdit;
 use lsp_types::WorkspaceFolder;
 
@@ -56,7 +57,6 @@ use std::process::Command;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use std::time::Instant;
 
 use kclvm_ast::ast::Program;
 use kclvm_error::Diagnostic as KCLDiagnostic;
@@ -74,19 +74,19 @@ use proc_macro_crate::bench_test;
 
 use lsp_server::{Connection, Message, Notification, Request};
 
+use crate::compile::compile_with_params;
 use crate::completion::completion;
 use crate::from_lsp::file_path_from_url;
 
+use crate::app::main_loop;
+use crate::compile::Params;
 use crate::goto_def::goto_def;
 use crate::hover::hover;
-use crate::main_loop::main_loop;
-use crate::state::KCLEntryCache;
 use crate::state::KCLGlobalStateCache;
 use crate::state::KCLVfs;
-use crate::to_lsp::kcl_diag_to_lsp_diags;
-use crate::util::lookup_compile_unit_with_cache;
+use crate::to_lsp::kcl_diag_to_lsp_diags_by_file;
+use crate::util::apply_document_changes;
 use crate::util::to_json;
-use crate::util::{apply_document_changes, compile_with_params, Params};
 
 macro_rules! wait_async_compile {
     () => {
@@ -133,12 +133,10 @@ pub(crate) fn compile_test_file(
     let file = test_file.to_str().unwrap().to_string();
 
     let (diags, compile_res) = compile_with_params(Params {
-        file: file.clone(),
+        file: Some(file.clone()),
         module_cache: Some(KCLModuleCache::default()),
         scope_cache: Some(KCLScopeCache::default()),
         vfs: Some(KCLVfs::default()),
-        entry_cache: Some(KCLEntryCache::default()),
-        tool: Arc::new(RwLock::new(toolchain::default())),
         gs_cache: Some(KCLGlobalStateCache::default()),
     });
     let (program, gs) = compile_res.unwrap();
@@ -160,22 +158,15 @@ pub(crate) fn compile_test_file_and_metadata(
 
     let file = test_file.to_str().unwrap().to_string();
 
-    let entry_cache = KCLEntryCache::default();
+    let metadata = lookup_compile_workspace(&toolchain::default(), &file, true).2;
     let (diags, compile_res) = compile_with_params(Params {
-        file: file.clone(),
+        file: Some(file.clone()),
         module_cache: Some(KCLModuleCache::default()),
         scope_cache: Some(KCLScopeCache::default()),
         vfs: Some(KCLVfs::default()),
-        entry_cache: Some(entry_cache.clone()),
-        tool: Arc::new(RwLock::new(toolchain::default())),
         gs_cache: Some(KCLGlobalStateCache::default()),
     });
     let (program, gs) = compile_res.unwrap();
-
-    let metadata = entry_cache
-        .read()
-        .get(&file)
-        .and_then(|metadata| metadata.0 .2.clone());
 
     (file, program, diags, gs, metadata)
 }
@@ -332,19 +323,17 @@ fn diagnostics_test() {
     let file = test_file.to_str().unwrap();
 
     let diags = compile_with_params(Params {
-        file: file.to_string(),
+        file: Some(file.to_string()),
         module_cache: None,
         scope_cache: None,
         vfs: Some(KCLVfs::default()),
-        entry_cache: Some(KCLEntryCache::default()),
-        tool: Arc::new(RwLock::new(toolchain::default())),
         gs_cache: Some(KCLGlobalStateCache::default()),
     })
     .0;
 
     let diagnostics = diags
         .iter()
-        .flat_map(|diag| kcl_diag_to_lsp_diags(diag, file))
+        .flat_map(|diag| kcl_diag_to_lsp_diags_by_file(diag, file))
         .collect::<Vec<Diagnostic>>();
 
     let expected_diags: Vec<Diagnostic> = build_expect_diags();
@@ -523,12 +512,10 @@ fn complete_import_external_file_test() {
         .unwrap();
 
     let (program, gs) = compile_with_params(Params {
-        file: path.to_string(),
+        file: Some(path.to_string()),
         module_cache: None,
         scope_cache: None,
         vfs: Some(KCLVfs::default()),
-        entry_cache: Some(KCLEntryCache::default()),
-        tool: Arc::new(RwLock::new(toolchain::default())),
         gs_cache: Some(KCLGlobalStateCache::default()),
     })
     .1
@@ -585,12 +572,10 @@ fn goto_import_external_file_test() {
         .unwrap();
 
     let (diags, compile_res) = compile_with_params(Params {
-        file: path.to_string(),
+        file: Some(path.to_string()),
         module_cache: None,
         scope_cache: None,
         vfs: Some(KCLVfs::default()),
-        entry_cache: Some(KCLEntryCache::default()),
-        tool: Arc::new(RwLock::new(toolchain::default())),
         gs_cache: Some(KCLGlobalStateCache::default()),
     });
     let gs = compile_res.unwrap().1;
@@ -784,27 +769,31 @@ fn notification_test() {
     );
 
     // Wait for first "textDocument/publishDiagnostics" notification
-    server.wait_for_message_cond(1, &|msg: &Message| match msg {
+    server.wait_for_message_cond(2, &|msg: &Message| match msg {
         Message::Notification(not) => not.method == "textDocument/publishDiagnostics",
         _ => false,
     });
 
     let msgs = server.messages.borrow();
-
-    match msgs.last().unwrap() {
-        Message::Notification(not) => {
-            assert_eq!(
-                not.params,
-                to_json(PublishDiagnosticsParams {
-                    uri: Url::from_file_path(path).unwrap(),
-                    diagnostics: build_expect_diags(),
-                    version: None,
-                })
-                .unwrap()
-            );
-        }
-        _ => {
-            unreachable!("test error")
+    for msg in msgs.iter() {
+        match msg {
+            Message::Notification(not) => {
+                if let Some(uri) = not.params.get("uri") {
+                    if uri.clone() == to_json(Url::from_file_path(path).unwrap()).unwrap() {
+                        assert_eq!(
+                            not.params,
+                            to_json(PublishDiagnosticsParams {
+                                uri: Url::from_file_path(path).unwrap(),
+                                diagnostics: build_expect_diags(),
+                                version: None,
+                            })
+                            .unwrap()
+                        );
+                        break;
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -938,116 +927,6 @@ fn cancel_test() {
     });
 
     assert!(server.receive_response(id.into()).is_none());
-}
-
-#[test]
-fn entry_test() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut path = root.clone();
-    path.push("src/test_data/compile_unit/b.k");
-
-    let path = path.to_str().unwrap();
-
-    let tool = toolchain::default();
-    let entry = KCLEntryCache::default();
-    let start = Instant::now();
-    let _ = lookup_compile_unit_with_cache(&tool, &Some(Arc::clone(&entry)), path);
-
-    assert!(entry.read().get(&path.to_string()).is_some());
-    let first_compile_time = start.elapsed();
-
-    let start = Instant::now();
-    let _ = lookup_compile_unit_with_cache(&tool, &Some(entry), path);
-    let second_compile_time = start.elapsed();
-
-    assert!(first_compile_time > second_compile_time);
-}
-
-#[test]
-fn entry_e2e_test() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut path = root.clone();
-    let mut kcl_yaml = root.clone();
-    path.push("src/test_data/compile_unit/b.k");
-    kcl_yaml.push("src/test_data/compile_unit/kcl.yaml");
-
-    let path = path.to_str().unwrap();
-
-    let kcl_yaml = kcl_yaml.to_str().unwrap();
-    let src = std::fs::read_to_string(path).unwrap();
-    let server = Project {}.server(InitializeParams::default());
-
-    // Mock open file
-    server.notification::<lsp_types::notification::DidOpenTextDocument>(
-        lsp_types::DidOpenTextDocumentParams {
-            text_document: TextDocumentItem {
-                uri: Url::from_file_path(path).unwrap(),
-                language_id: "KCL".to_string(),
-                version: 0,
-                text: src,
-            },
-        },
-    );
-
-    server.wait_for_message_cond(1, &|msg: &Message| match msg {
-        Message::Notification(not) => not.method == "textDocument/publishDiagnostics",
-        _ => false,
-    });
-
-    // Mock edit file
-    server.notification::<lsp_types::notification::DidChangeTextDocument>(
-        lsp_types::DidChangeTextDocumentParams {
-            text_document: lsp_types::VersionedTextDocumentIdentifier {
-                uri: Url::from_file_path(path).unwrap(),
-                version: 1,
-            },
-            content_changes: vec![lsp_types::TextDocumentContentChangeEvent {
-                range: Some(lsp_types::Range::new(
-                    lsp_types::Position::new(0, 0),
-                    lsp_types::Position::new(0, 0),
-                )),
-                range_length: Some(0),
-                text: String::from("\n"),
-            }],
-        },
-    );
-    server.wait_for_message_cond(2, &|msg: &Message| match msg {
-        Message::Notification(not) => not.method == "textDocument/publishDiagnostics",
-        _ => false,
-    });
-
-    // Mock edit config file, clear cache
-    server.notification::<lsp_types::notification::DidChangeWatchedFiles>(
-        lsp_types::DidChangeWatchedFilesParams {
-            changes: vec![FileEvent {
-                uri: Url::from_file_path(kcl_yaml).unwrap(),
-                typ: FileChangeType::CHANGED,
-            }],
-        },
-    );
-
-    // Mock edit file
-    server.notification::<lsp_types::notification::DidChangeTextDocument>(
-        lsp_types::DidChangeTextDocumentParams {
-            text_document: lsp_types::VersionedTextDocumentIdentifier {
-                uri: Url::from_file_path(path).unwrap(),
-                version: 2,
-            },
-            content_changes: vec![lsp_types::TextDocumentContentChangeEvent {
-                range: Some(lsp_types::Range::new(
-                    lsp_types::Position::new(0, 0),
-                    lsp_types::Position::new(0, 0),
-                )),
-                range_length: Some(0),
-                text: String::from("\n"),
-            }],
-        },
-    );
-
-    server.wait_for_message_cond(3, &|msg: &Message| match msg {
-        Message::Notification(not) => not.method == "textDocument/publishDiagnostics",
-        _ => false,
-    });
 }
 
 #[test]
@@ -1198,6 +1077,21 @@ fn complete_with_version_test() {
         },
     );
 
+    server.notification::<lsp_types::notification::DidChangeTextDocument>(
+        lsp_types::DidChangeTextDocumentParams {
+            text_document: lsp_types::VersionedTextDocumentIdentifier {
+                uri: Url::from_file_path(path).unwrap(),
+                version: 1,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "schema Name:\n    name: str\n\nname1 = \"\"\n\nname: Name{\n    \n}"
+                    .to_string(),
+            }],
+        },
+    );
+
     let id = server.next_request_id.get();
     server.next_request_id.set(id.wrapping_add(1));
 
@@ -1222,21 +1116,6 @@ fn complete_with_version_test() {
 
     let id = r.id.clone();
     server.client.sender.send(r.into()).unwrap();
-
-    server.notification::<lsp_types::notification::DidChangeTextDocument>(
-        lsp_types::DidChangeTextDocumentParams {
-            text_document: lsp_types::VersionedTextDocumentIdentifier {
-                uri: Url::from_file_path(path).unwrap(),
-                version: 1,
-            },
-            content_changes: vec![TextDocumentContentChangeEvent {
-                range: None,
-                range_length: None,
-                text: "schema Name:\n    name: str\n\nname1 = \"\"\n\nname: Name{\n    \n}"
-                    .to_string(),
-            }],
-        },
-    );
 
     while let Some(msg) = server.recv() {
         match msg {
@@ -1528,12 +1407,10 @@ fn konfig_goto_def_test_base() {
     base_path.push("appops/nginx-example/base/base.k");
     let base_path_str = base_path.to_str().unwrap().to_string();
     let (_program, gs) = compile_with_params(Params {
-        file: base_path_str.clone(),
+        file: Some(base_path_str.clone()),
         module_cache: None,
         scope_cache: None,
         vfs: Some(KCLVfs::default()),
-        entry_cache: Some(KCLEntryCache::default()),
-        tool: Arc::new(RwLock::new(toolchain::default())),
         gs_cache: Some(KCLGlobalStateCache::default()),
     })
     .1
@@ -1623,12 +1500,10 @@ fn konfig_goto_def_test_main() {
     main_path.push("appops/nginx-example/dev/main.k");
     let main_path_str = main_path.to_str().unwrap().to_string();
     let (_program, gs) = compile_with_params(Params {
-        file: main_path_str.clone(),
+        file: Some(main_path_str.clone()),
         module_cache: None,
         scope_cache: None,
         vfs: Some(KCLVfs::default()),
-        entry_cache: Some(KCLEntryCache::default()),
-        tool: Arc::new(RwLock::new(toolchain::default())),
         gs_cache: Some(KCLGlobalStateCache::default()),
     })
     .1
@@ -1690,12 +1565,10 @@ fn konfig_completion_test_main() {
     main_path.push("appops/nginx-example/dev/main.k");
     let main_path_str = main_path.to_str().unwrap().to_string();
     let (program, gs) = compile_with_params(Params {
-        file: main_path_str.clone(),
+        file: Some(main_path_str.clone()),
         module_cache: None,
         scope_cache: None,
         vfs: Some(KCLVfs::default()),
-        entry_cache: Some(KCLEntryCache::default()),
-        tool: Arc::new(RwLock::new(toolchain::default())),
         gs_cache: Some(KCLGlobalStateCache::default()),
     })
     .1
@@ -1806,12 +1679,10 @@ fn konfig_hover_test_main() {
     main_path.push("appops/nginx-example/dev/main.k");
     let main_path_str = main_path.to_str().unwrap().to_string();
     let (_program, gs) = compile_with_params(Params {
-        file: main_path_str.clone(),
+        file: Some(main_path_str.clone()),
         module_cache: None,
         scope_cache: None,
         vfs: Some(KCLVfs::default()),
-        entry_cache: Some(KCLEntryCache::default()),
-        tool: Arc::new(RwLock::new(toolchain::default())),
         gs_cache: Some(KCLGlobalStateCache::default()),
     })
     .1
@@ -1830,7 +1701,7 @@ fn konfig_hover_test_main() {
                 MarkedString::String("base.pkg.kusion_models.kube.frontend".to_string()),
                 MarkedString::LanguageString(lsp_types::LanguageString {
                     language: "KCL".to_string(),
-                    value: "schema Server:\n    name?: str\n    workloadType: str(Deployment) | str(StatefulSet)\n    renderType?: str(Server) | str(KubeVelaApplication)\n    replicas: int\n    image: str\n    schedulingStrategy: SchedulingStrategy\n    mainContainer: Main\n    sidecarContainers?: [Sidecar]\n    initContainers?: [Sidecar]\n    useBuiltInLabels?: bool\n    labels?: {str:str}\n    annotations?: {str:str}\n    useBuiltInSelector?: bool\n    selector?: {str:str}\n    podMetadata?: ObjectMeta\n    volumes?: [Volume]\n    needNamespace?: bool\n    enableMonitoring?: bool\n    configMaps?: [ConfigMap]\n    secrets?: [Secret]\n    services?: [Service]\n    ingresses?: [Ingress]\n    serviceAccount?: ServiceAccount\n    storage?: ObjectStorage\n    database?: DataBase".to_string()
+                    value: "schema Server:\n    name?: str\n    workloadType: \"Deployment\" | \"StatefulSet\" = \"Deployment\"\n    renderType?: \"Server\" | \"KubeVelaApplication\" = \"Server\"\n    replicas: int = option(\"replicas\") or 1\n    image: str = option(\"image\")\n    schedulingStrategy: SchedulingStrategy = strategy.SchedulingStrategy {}\n    mainContainer: Main\n    sidecarContainers?: [Sidecar]\n    initContainers?: [Sidecar]\n    useBuiltInLabels?: bool = True\n    labels?: {str:str}\n    annotations?: {str:str}\n    useBuiltInSelector?: bool = True\n    selector?: {str:str}\n    podMetadata?: ObjectMeta\n    volumes?: [Volume]\n    needNamespace?: bool = True\n    enableMonitoring?: bool = False\n    configMaps?: [ConfigMap]\n    secrets?: [Secret]\n    services?: [Service]\n    ingresses?: [Ingress]\n    serviceAccount?: ServiceAccount\n    storage?: ObjectStorage\n    database?: DataBase".to_string()
                 }),
                 MarkedString::String("Server is abstaction of Deployment and StatefulSet.".to_string()),
             ];
@@ -1851,7 +1722,9 @@ fn konfig_hover_test_main() {
             let expect: Vec<MarkedString> = vec![
                 MarkedString::LanguageString(lsp_types::LanguageString {
                     language: "KCL".to_string(),
-                    value: "schedulingStrategy: SchedulingStrategy".to_string(),
+                    value:
+                        "schedulingStrategy: SchedulingStrategy = strategy.SchedulingStrategy {}"
+                            .to_string(),
                 }),
                 MarkedString::String(
                     "SchedulingStrategy represents scheduling strategy.".to_string(),
@@ -1886,7 +1759,7 @@ fn konfig_hover_test_main() {
 #[test]
 fn lsp_version_test() {
     let args = vec!["kcl-language-server".to_string(), "version".to_string()];
-    let matches = crate::main_loop::app()
+    let matches = crate::app::app()
         .arg_required_else_help(false)
         .try_get_matches_from(args);
     match matches {
@@ -1901,7 +1774,7 @@ fn lsp_version_test() {
 #[test]
 fn lsp_run_test() {
     let args = vec!["kcl-language-server".to_string()];
-    let matches = crate::main_loop::app()
+    let matches = crate::app::app()
         .arg_required_else_help(false)
         .try_get_matches_from(args);
     match matches {
@@ -1916,7 +1789,7 @@ fn lsp_run_test() {
 #[test]
 fn lsp_invalid_subcommand_test() {
     let args = vec!["kcl-language-server".to_string(), "invalid".to_string()];
-    let matches = crate::main_loop::app()
+    let matches = crate::app::app()
         .arg_required_else_help(false)
         .try_get_matches_from(args);
     match matches {
@@ -2153,7 +2026,6 @@ fn rename_test() {
     };
     let server = Project {}.server(initialize_params);
 
-    // Wait for async build word_index_map
     wait_async_compile!();
 
     let url = Url::from_file_path(path).unwrap();
@@ -2242,12 +2114,10 @@ fn compile_unit_test() {
     let file = test_file.to_str().unwrap();
 
     let prog = compile_with_params(Params {
-        file: file.to_string(),
+        file: Some(file.to_string()),
         module_cache: None,
         scope_cache: None,
         vfs: Some(KCLVfs::default()),
-        entry_cache: Some(KCLEntryCache::default()),
-        tool: Arc::new(RwLock::new(toolchain::default())),
         gs_cache: Some(KCLGlobalStateCache::default()),
     })
     .1
@@ -2277,7 +2147,7 @@ fn kcl_workspace_init_kclwork_test() {
     work.push("work");
 
     let (workspaces, failed) =
-        kclvm_driver::lookup_compile_workspaces(&*tool.read(), &work.to_str().unwrap(), true);
+        kclvm_driver::lookup_compile_workspaces(&*tool.read(), work.to_str().unwrap(), true);
 
     let mut expected = HashSet::new();
 
@@ -2311,10 +2181,7 @@ fn kcl_workspace_init_kclwork_test() {
             .join("c.k"),
     ));
 
-    assert_eq!(
-        expected,
-        workspaces.keys().into_iter().map(|w| w.clone()).collect()
-    );
+    assert_eq!(expected, workspaces.keys().cloned().collect());
 
     assert!(failed.is_some());
     assert!(failed.unwrap().is_empty());
@@ -2334,8 +2201,11 @@ fn kcl_workspace_init_kclmod_test() {
     let mut work = root.clone();
     work.push("mod");
 
+    let mut main = work.clone();
+    main.push("main.k");
+
     let (workspaces, failed) =
-        kclvm_driver::lookup_compile_workspaces(&*tool.read(), &work.to_str().unwrap(), true);
+        kclvm_driver::lookup_compile_workspaces(&*tool.read(), work.to_str().unwrap(), true);
 
     let mut expected = HashSet::new();
 
@@ -2349,12 +2219,52 @@ fn kcl_workspace_init_kclmod_test() {
             .join("kcl.mod"),
     ));
 
+    assert_eq!(expected, workspaces.keys().cloned().collect());
     assert_eq!(
-        expected,
-        workspaces.keys().into_iter().map(|w| w.clone()).collect()
+        vec![main.to_str().unwrap().to_string()],
+        workspaces.values().next().unwrap().0
     );
-
     assert!(failed.is_none());
+}
+
+#[test]
+fn kcl_workspace_init_settings_file_test() {
+    let tool: crate::state::KCLToolChain = Arc::new(RwLock::new(toolchain::default()));
+    let tool = Arc::clone(&tool);
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("test_data")
+        .join("workspace")
+        .join("init");
+
+    let mut work = root.clone();
+    work.push("setting");
+
+    let mut a = work.clone();
+    a.push("a.k");
+
+    let (workspaces, failed) =
+        kclvm_driver::lookup_compile_workspaces(&*tool.read(), work.to_str().unwrap(), true);
+
+    let mut expected = HashSet::new();
+
+    expected.insert(WorkSpaceKind::SettingFile(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("test_data")
+            .join("workspace")
+            .join("init")
+            .join("setting")
+            .join("kcl.yaml"),
+    ));
+
+    assert_eq!(expected, workspaces.keys().cloned().collect());
+    assert!(failed.is_none());
+    assert_eq!(
+        vec![a.file_name().unwrap().to_str().unwrap().to_string()],
+        workspaces.values().next().unwrap().0
+    );
 }
 
 #[test]
@@ -2372,7 +2282,7 @@ fn kcl_workspace_init_folder_test() {
     work.push("folder");
 
     let (workspaces, failed) =
-        kclvm_driver::lookup_compile_workspaces(&*tool.read(), &work.to_str().unwrap(), true);
+        kclvm_driver::lookup_compile_workspaces(&*tool.read(), work.to_str().unwrap(), true);
 
     let mut expected = HashSet::new();
 
@@ -2385,10 +2295,111 @@ fn kcl_workspace_init_folder_test() {
             .join("folder"),
     ));
 
-    assert_eq!(
-        expected,
-        workspaces.keys().into_iter().map(|w| w.clone()).collect()
-    );
+    assert_eq!(expected, workspaces.keys().cloned().collect());
 
     assert!(failed.is_none());
+}
+
+#[test]
+fn init_workspace_sema_token_test() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("test_data")
+        .join("workspace")
+        .join("init")
+        .join("folder");
+
+    let mut a_path = root.clone();
+    a_path.push("a.k");
+
+    let mut c_path = root.clone();
+    c_path.push("sub");
+    c_path.push("c.k");
+
+    let a_path = a_path.to_str().unwrap();
+    let c_path = c_path.to_str().unwrap();
+    let a_src = std::fs::read_to_string(a_path).unwrap();
+    let c_src = std::fs::read_to_string(c_path).unwrap();
+    let initialize_params = InitializeParams {
+        workspace_folders: Some(vec![WorkspaceFolder {
+            uri: Url::from_file_path(root.clone()).unwrap(),
+            name: "test".to_string(),
+        }]),
+        ..Default::default()
+    };
+    let server = Project {}.server(initialize_params);
+
+    let a_url = Url::from_file_path(a_path).unwrap();
+    let c_url = Url::from_file_path(c_path).unwrap();
+
+    // Mock open file in init workspace
+    server.notification::<lsp_types::notification::DidOpenTextDocument>(
+        lsp_types::DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: a_url.clone(),
+                language_id: "KCL".to_string(),
+                version: 0,
+                text: a_src,
+            },
+        },
+    );
+
+    let id = server.next_request_id.get();
+    server.next_request_id.set(id.wrapping_add(1));
+
+    let r: Request = Request::new(
+        id.into(),
+        "textDocument/semanticTokens/full".to_string(),
+        SemanticTokensParams {
+            text_document: TextDocumentIdentifier { uri: a_url },
+            work_done_progress_params: WorkDoneProgressParams {
+                work_done_token: None,
+            },
+            partial_result_params: PartialResultParams {
+                partial_result_token: None,
+            },
+        },
+    );
+
+    let res = server.send_and_receive(r);
+    assert!(res.result.is_some());
+
+    // Mock open file not in init workspace
+    server.notification::<lsp_types::notification::DidOpenTextDocument>(
+        lsp_types::DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: c_url.clone(),
+                language_id: "KCL".to_string(),
+                version: 0,
+                text: c_src,
+            },
+        },
+    );
+
+    let id = server.next_request_id.get();
+    server.next_request_id.set(id.wrapping_add(1));
+
+    let r: Request = Request::new(
+        id.into(),
+        "textDocument/semanticTokens/full".to_string(),
+        SemanticTokensParams {
+            text_document: TextDocumentIdentifier { uri: c_url },
+            work_done_progress_params: WorkDoneProgressParams {
+                work_done_token: None,
+            },
+            partial_result_params: PartialResultParams {
+                partial_result_token: None,
+            },
+        },
+    );
+
+    let res = server.send_and_receive(r);
+    assert!(res.result.is_some());
+}
+
+#[test]
+fn pkg_mod_test() {
+    let (_file, _program, diags, _gs) =
+        compile_test_file("src/test_data/workspace/pkg_mod_test/test/main.k");
+    assert_eq!(diags.iter().filter(|diag| diag.is_error()).count(), 0);
 }

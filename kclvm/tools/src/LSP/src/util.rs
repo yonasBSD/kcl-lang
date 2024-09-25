@@ -1,4 +1,3 @@
-use indexmap::IndexSet;
 use kclvm_ast::ast::{
     ConfigEntry, Expr, Identifier, MemberOrIndex, Node, NodeRef, PosTuple, Program, SchemaStmt,
     Stmt, Type,
@@ -6,39 +5,19 @@ use kclvm_ast::ast::{
 use kclvm_ast::node_ref;
 use kclvm_ast::pos::ContainsPos;
 
-use kclvm_config::modfile::KCL_MOD_FILE;
-use kclvm_driver::toolchain::Toolchain;
-use kclvm_driver::{
-    lookup_compile_unit_path, lookup_compile_workspace, CompileUnitOptions, CompileUnitPath,
-};
-use kclvm_error::Diagnostic;
 use kclvm_error::Position as KCLPos;
 use kclvm_parser::entry::get_dir_files;
-use kclvm_parser::LoadProgramOptions;
-use kclvm_parser::{
-    entry::get_normalized_k_files_from_paths, load_program, KCLModuleCache, ParseSessionRef,
-};
-use kclvm_sema::advanced_resolver::AdvancedResolver;
-use kclvm_sema::core::global_state::GlobalState;
-use kclvm_sema::namer::Namer;
-
-use kclvm_config::settings::DEFAULT_SETTING_FILE;
-use kclvm_sema::resolver::resolve_program_with_opts;
-use kclvm_sema::resolver::scope::KCLScopeCache;
 
 use crate::from_lsp;
-use crate::state::{KCLEntryCache, KCLToolChain};
-use crate::state::{KCLGlobalStateCache, KCLVfs};
+use crate::state::KCLVfs;
 use lsp_types::Url;
 use parking_lot::RwLockReadGuard;
 use ra_ap_vfs::{FileId, Vfs};
 use serde::{de::DeserializeOwned, Serialize};
 
-use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-#[allow(unused)]
 /// Deserializes a `T` from a json value.
 pub(crate) fn from_json<T: DeserializeOwned>(
     what: &'static str,
@@ -69,202 +48,6 @@ pub(crate) fn get_file_name(vfs: RwLockReadGuard<Vfs>, file_id: FileId) -> anyho
     }
 }
 
-pub(crate) struct Params {
-    pub file: String,
-    pub module_cache: Option<KCLModuleCache>,
-    pub scope_cache: Option<KCLScopeCache>,
-    pub entry_cache: Option<KCLEntryCache>,
-    pub vfs: Option<KCLVfs>,
-    pub tool: KCLToolChain,
-    pub gs_cache: Option<KCLGlobalStateCache>,
-}
-
-pub(crate) fn lookup_compile_unit_with_cache(
-    tool: &dyn Toolchain,
-    entry_map: &Option<KCLEntryCache>,
-    file: &str,
-) -> CompileUnitOptions {
-    match entry_map {
-        Some(cache) => {
-            let mut map = cache.write();
-            let current_timestamp = {
-                match &mut lookup_compile_unit_path(file) {
-                    Ok(CompileUnitPath::SettingFile(dir)) => {
-                        dir.push(DEFAULT_SETTING_FILE);
-                        get_last_modified_time(&dir).ok()
-                    }
-                    Ok(CompileUnitPath::ModFile(dir)) => {
-                        dir.push(KCL_MOD_FILE);
-                        get_last_modified_time(&dir).ok()
-                    }
-                    _ => None,
-                }
-            };
-
-            match map.get(file) {
-                Some((compile_unit, cached_timestamp)) => {
-                    match (cached_timestamp, current_timestamp) {
-                        (Some(cached_timestamp), Some(current_timestamp)) => {
-                            if cached_timestamp == &current_timestamp {
-                                compile_unit.clone()
-                            } else {
-                                let res = lookup_compile_workspace(tool, file, true);
-                                map.insert(
-                                    file.to_string(),
-                                    (res.clone(), Some(current_timestamp)),
-                                );
-                                res
-                            }
-                        }
-                        (_, current_timestamp) => {
-                            let res = lookup_compile_workspace(tool, file, true);
-                            map.insert(file.to_string(), (res.clone(), current_timestamp));
-                            res
-                        }
-                    }
-                }
-                None => {
-                    let res = lookup_compile_workspace(tool, file, true);
-                    map.insert(file.to_string(), (res.clone(), current_timestamp));
-                    res
-                }
-            }
-        }
-        None => lookup_compile_workspace(tool, file, true),
-    }
-}
-
-pub(crate) fn get_last_modified_time(path: &PathBuf) -> std::io::Result<std::time::SystemTime> {
-    if path.is_file() {
-        return fs::metadata(path)
-            .map(|meta| meta.modified())
-            .and_then(|t| t);
-    } else if path.is_dir() {
-        let mut last_modified_time = std::time::SystemTime::UNIX_EPOCH;
-        for entry in fs::read_dir(path)? {
-            let entry = entry?;
-            let metadata = entry.metadata()?;
-            let modified_time = metadata.modified()?;
-            if modified_time > last_modified_time {
-                last_modified_time = modified_time;
-            }
-        }
-
-        return Ok(last_modified_time);
-    } else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Not a file or directory",
-        ));
-    }
-}
-
-pub(crate) fn compile_with_params(
-    params: Params,
-) -> (IndexSet<Diagnostic>, anyhow::Result<(Program, GlobalState)>) {
-    // Lookup compile unit (kcl.mod or kcl.yaml) from the entry file.
-    let (mut files, opts, _) =
-        lookup_compile_unit_with_cache(&*params.tool.read(), &params.entry_cache, &params.file);
-    if !files.contains(&params.file) {
-        files.push(params.file.clone());
-    }
-    compile(params, &mut files, opts)
-}
-
-pub(crate) fn compile(
-    params: Params,
-    files: &mut Vec<String>,
-    opts: Option<LoadProgramOptions>,
-) -> (IndexSet<Diagnostic>, anyhow::Result<(Program, GlobalState)>) {
-    // Ignore the kcl plugin sematic check.
-    let mut opts = opts.unwrap_or_default();
-    opts.load_plugins = true;
-    // Get input files
-    let files = match get_normalized_k_files_from_paths(&files, &opts) {
-        Ok(file_list) => file_list,
-        Err(e) => {
-            return (
-                IndexSet::new(),
-                Err(anyhow::anyhow!("Compile failed: {:?}", e)),
-            )
-        }
-    };
-    let files: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
-    // Update opt.k_code_list
-    if let Some(vfs) = &params.vfs {
-        let mut k_code_list = match load_files_code_from_vfs(&files, vfs) {
-            Ok(code_list) => code_list,
-            Err(e) => {
-                return (
-                    IndexSet::new(),
-                    Err(anyhow::anyhow!("Compile failed: {:?}", e)),
-                )
-            }
-        };
-        opts.k_code_list.append(&mut k_code_list);
-    }
-
-    let mut diags = IndexSet::new();
-
-    // Parser
-    let sess = ParseSessionRef::default();
-    let mut program = match load_program(sess.clone(), &files, Some(opts), params.module_cache) {
-        Ok(r) => r.program,
-        Err(e) => return (diags, Err(anyhow::anyhow!("Parse failed: {:?}", e))),
-    };
-    diags.extend(sess.1.borrow().diagnostics.clone());
-
-    // Resolver
-    if let Some(cached_scope) = params.scope_cache.as_ref() {
-        if let Some(mut cached_scope) = cached_scope.try_write() {
-            let mut invalidate_pkg_modules = HashSet::new();
-            invalidate_pkg_modules.insert(params.file);
-            cached_scope.invalidate_pkg_modules = Some(invalidate_pkg_modules);
-        }
-    }
-
-    let prog_scope = resolve_program_with_opts(
-        &mut program,
-        kclvm_sema::resolver::Options {
-            merge_program: false,
-            type_erasure: false,
-            ..Default::default()
-        },
-        params.scope_cache.clone(),
-    );
-    diags.extend(prog_scope.handler.diagnostics);
-
-    let mut default = GlobalState::default();
-    let mut gs_ref;
-
-    let mut gs = match &params.gs_cache {
-        Some(cache) => match cache.try_lock() {
-            Ok(locked_state) => {
-                gs_ref = locked_state;
-                &mut gs_ref
-            }
-            Err(_) => &mut default,
-        },
-        None => &mut default,
-    };
-
-    gs.new_or_invalidate_pkgs = match &params.scope_cache {
-        Some(cache) => match cache.try_write() {
-            Some(scope) => scope.invalidate_pkgs.clone(),
-            None => HashSet::new(),
-        },
-        None => HashSet::new(),
-    };
-    gs.clear_cache();
-
-    Namer::find_symbols(&program, &mut gs);
-
-    match AdvancedResolver::resolve_program(&program, gs, prog_scope.node_ty_map) {
-        Ok(_) => (diags, Ok((program, gs.clone()))),
-        Err(e) => (diags, Err(anyhow::anyhow!("Resolve failed: {:?}", e))),
-    }
-}
-
 /// Update text with TextDocumentContentChangeEvent param
 pub(crate) fn apply_document_changes(
     old_text: &mut String,
@@ -283,7 +66,10 @@ pub(crate) fn apply_document_changes(
     }
 }
 
-fn load_files_code_from_vfs(files: &[&str], vfs: &KCLVfs) -> anyhow::Result<Vec<String>> {
+pub(crate) fn load_files_code_from_vfs(
+    files: &[&str],
+    vfs: &KCLVfs,
+) -> anyhow::Result<Vec<String>> {
     let mut res = vec![];
     let vfs = &mut vfs.read();
     for file in files {

@@ -229,7 +229,7 @@ fn test_resolve_program_cycle_reference_fail() {
     let sess = Arc::new(ParseSession::default());
     let mut program = load_program(
         sess.clone(),
-        &["./src/resolver/test_fail_data/cycle_reference/file1.k"],
+        &["./src/resolver/test_fail_data/cycle_reference/file2.k"],
         None,
         None,
     )
@@ -237,13 +237,17 @@ fn test_resolve_program_cycle_reference_fail() {
     .program;
     let scope = resolve_program(&mut program);
     let err_messages = [
-        "There is a circular import reference between module file1 and file2",
-        "There is a circular reference between schema SchemaBase and SchemaSub",
-        "There is a circular reference between schema SchemaSub and SchemaBase",
-        "There is a circular reference between rule RuleBase and RuleSub",
-        "There is a circular reference between rule RuleSub and RuleBase",
-        "Module 'file2' imported but unused",
+        "There is a circular reference between modules file1, file2",
+        "There is a circular reference between modules file1, file2",
+        "There is a circular reference between schemas file1.SchemaBase, file1.SchemaSub",
+        "There is a circular reference between schemas file1.SchemaBase, file1.SchemaSub",
+        "There is a circular reference between rules file1.RuleBase, file1.RuleSub",
+        "There is a circular reference between rules file1.RuleBase, file1.RuleSub",
+        "There is a circular reference between schemas file1.A, file1.B, file1.C",
+        "There is a circular reference between schemas file1.A, file1.B, file1.C",
+        "There is a circular reference between schemas file1.A, file1.B, file1.C",
         "Module 'file1' imported but unused",
+        "Module 'file2' imported but unused",
     ];
     assert_eq!(scope.handler.diagnostics.len(), err_messages.len());
     for (diag, msg) in scope.handler.diagnostics.iter().zip(err_messages.iter()) {
@@ -749,14 +753,14 @@ fn test_pkg_not_found_suggestion() {
     assert_eq!(diag.messages.len(), 1);
     assert_eq!(
         diag.messages[0].message,
-        "try 'kcl mod add k9s' to download the package not found"
+        "try 'kcl mod add k9s' to download the missing package"
     );
     let diag = &scope.handler.diagnostics[2];
     assert_eq!(diag.code, Some(DiagnosticId::Suggestions));
     assert_eq!(diag.messages.len(), 1);
     assert_eq!(
         diag.messages[0].message,
-        "find more package on 'https://artifacthub.io'"
+        "browse more packages at 'https://artifacthub.io'"
     );
 }
 

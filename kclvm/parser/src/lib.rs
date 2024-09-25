@@ -305,7 +305,14 @@ pub fn load_program(
     Loader::new(sess, paths, opts, module_cache).load_main()
 }
 
-pub type KCLModuleCache = Arc<RwLock<IndexMap<String, ast::Module>>>;
+pub type KCLModuleCache = Arc<RwLock<ModuleCache>>;
+
+#[derive(Default, Debug)]
+pub struct ModuleCache {
+    pub ast_cache: IndexMap<String, ast::Module>,
+    /// Invalid modules and new code, equivalent to paths and k_code_list. The difference is that paths is in the main package.
+    pub invalidate_module: HashMap<String, Option<String>>,
+}
 struct Loader {
     sess: ParseSessionRef,
     paths: Vec<String>,
@@ -320,7 +327,7 @@ impl Loader {
         sess: ParseSessionRef,
         paths: &[&str],
         opts: Option<LoadProgramOptions>,
-        module_cache: Option<Arc<RwLock<IndexMap<String, ast::Module>>>>,
+        module_cache: Option<KCLModuleCache>,
     ) -> Self {
         Self {
             sess,
@@ -350,7 +357,7 @@ impl Loader {
             for entry in compile_entries.iter() {
                 let k_files = entry.get_k_files();
                 let maybe_k_codes = entry.get_k_codes();
-                // Load main package.
+                // update main pkg ast cache
                 for (i, filename) in k_files.iter().enumerate() {
                     let m = parse_file_with_session(
                         self.sess.clone(),
@@ -358,7 +365,22 @@ impl Loader {
                         maybe_k_codes[i].clone(),
                     )?;
                     let mut module_cache_ref = module_cache.write().unwrap();
-                    module_cache_ref.insert(filename.clone(), m.clone());
+                    module_cache_ref
+                        .ast_cache
+                        .insert(filename.clone(), m.clone());
+                }
+                // update invalidate module ast cache
+                let mut module_cache_ref = module_cache.write().unwrap();
+                let invalidate_module = module_cache_ref.invalidate_module.clone();
+                module_cache_ref.invalidate_module.clear();
+                drop(module_cache_ref);
+
+                for (filename, code) in invalidate_module.iter() {
+                    let m = parse_file_with_session(self.sess.clone(), filename, code.clone())?;
+                    let mut module_cache_ref = module_cache.write().unwrap();
+                    module_cache_ref
+                        .ast_cache
+                        .insert(filename.clone(), m.clone());
                 }
             }
         }
@@ -370,7 +392,7 @@ impl Loader {
             for (i, filename) in k_files.iter().enumerate() {
                 let mut m = if let Some(module_cache) = self.module_cache.as_ref() {
                     let module_cache_ref = module_cache.read().unwrap();
-                    module_cache_ref.get(filename).unwrap().clone()
+                    module_cache_ref.ast_cache.get(filename).unwrap().clone()
                 } else {
                     parse_file_with_session(self.sess.clone(), filename, maybe_k_codes[i].clone())?
                 };
@@ -402,7 +424,7 @@ impl Loader {
                     .map(|path| format!("- {}\n", path.to_string_lossy()))
                     .collect::<String>();
 
-                self.sess.1.borrow_mut().add_error(
+                self.sess.1.write().add_error(
                     ErrorKind::RecursiveLoad,
                     &[Message {
                         range: (Position::dummy_pos(), Position::dummy_pos()),
@@ -423,7 +445,7 @@ impl Loader {
 
         Ok(LoadProgramResult {
             program,
-            errors: self.sess.1.borrow().diagnostics.clone(),
+            errors: self.sess.1.read().diagnostics.clone(),
             paths,
         })
     }
@@ -452,7 +474,7 @@ impl Loader {
 
         // 3. Internal and external packages cannot be duplicated
         if is_external.is_some() && is_internal.is_some() {
-            self.sess.1.borrow_mut().add_error(
+            self.sess.1.write().add_error(
                 ErrorKind::CannotFindModule,
                 &[Message {
                     range: Into::<Range>::into(pos),
@@ -472,7 +494,7 @@ impl Loader {
         match is_internal.or(is_external) {
             Some(pkg_info) => Ok(Some(pkg_info)),
             None => {
-                self.sess.1.borrow_mut().add_error(
+                self.sess.1.write().add_error(
                     ErrorKind::CannotFindModule,
                     &[Message {
                         range: Into::<Range>::into(pos),
@@ -483,18 +505,18 @@ impl Loader {
                     }],
                 );
                 let mut suggestions =
-                    vec![format!("find more package on 'https://artifacthub.io'")];
+                    vec![format!("browse more packages at 'https://artifacthub.io'")];
 
                 if let Ok(pkg_name) = parse_external_pkg_name(pkg_path) {
                     suggestions.insert(
                         0,
                         format!(
-                            "try 'kcl mod add {}' to download the package not found",
+                            "try 'kcl mod add {}' to download the missing package",
                             pkg_name
                         ),
                     );
                 }
-                self.sess.1.borrow_mut().add_suggestions(suggestions);
+                self.sess.1.write().add_suggestions(suggestions);
                 Ok(None)
             }
         }
@@ -574,7 +596,7 @@ impl Loader {
         // plugin pkgs
         if self.is_plugin_pkg(pkgpath.as_str()) {
             if !self.opts.load_plugins {
-                self.sess.1.borrow_mut().add_error(
+                self.sess.1.write().add_error(
                     ErrorKind::CannotFindModule,
                     &[Message {
                         range: Into::<Range>::into(pos),
@@ -604,11 +626,6 @@ impl Loader {
             return Ok(Some(pkg_info));
         }
 
-        if pkg_info.k_files.is_empty() {
-            self.missing_pkgs.push(pkgpath);
-            return Ok(Some(pkg_info));
-        }
-
         if !self.opts.load_packages {
             return Ok(Some(pkg_info));
         }
@@ -619,13 +636,15 @@ impl Loader {
         for filename in k_files {
             let mut m = if let Some(module_cache) = self.module_cache.as_ref() {
                 let module_cache_ref = module_cache.read().unwrap();
-                if let Some(module) = module_cache_ref.get(&filename) {
+                if let Some(module) = module_cache_ref.ast_cache.get(&filename) {
                     module.clone()
                 } else {
                     let m = parse_file_with_session(self.sess.clone(), &filename, None)?;
                     drop(module_cache_ref);
                     let mut module_cache_ref = module_cache.write().unwrap();
-                    module_cache_ref.insert(filename.clone(), m.clone());
+                    module_cache_ref
+                        .ast_cache
+                        .insert(filename.clone(), m.clone());
                     m
                 }
             } else {
@@ -745,9 +764,9 @@ impl Loader {
         pkg_root: &str,
         pkg_path: &str,
     ) -> Result<Option<PkgInfo>> {
-        match self.pkg_exists(vec![pkg_root.to_string()], pkg_path) {
+        match self.pkg_exists(&[pkg_root.to_string()], pkg_path) {
             Some(internal_pkg_root) => {
-                let fullpath = if pkg_name == kclvm_ast::MAIN_PKG {
+                let full_pkg_path = if pkg_name == kclvm_ast::MAIN_PKG {
                     pkg_path.to_string()
                 } else {
                     format!("{}.{}", pkg_name, pkg_path)
@@ -756,7 +775,7 @@ impl Loader {
                 Ok(Some(PkgInfo::new(
                     pkg_name.to_string(),
                     internal_pkg_root,
-                    fullpath,
+                    full_pkg_path,
                     k_files,
                 )))
             }
@@ -776,7 +795,7 @@ impl Loader {
         let external_pkg_root = if let Some(root) = self.opts.package_maps.get(&pkg_name) {
             PathBuf::from(root).join(KCL_MOD_FILE)
         } else {
-            match self.pkg_exists(self.opts.vendor_dirs.clone(), pkg_path) {
+            match self.pkg_exists(&self.opts.vendor_dirs, pkg_path) {
                 Some(path) => PathBuf::from(path).join(&pkg_name).join(KCL_MOD_FILE),
                 None => return Ok(None),
             }
@@ -807,17 +826,17 @@ impl Loader {
     ///
     /// # Notes
     ///
-    /// All paths in [`pkgpath`] must contain the kcl.mod file.
     /// It returns the parent directory of kcl.mod if present, or none if not.
-    fn pkg_exists(&self, pkgroots: Vec<String>, pkgpath: &str) -> Option<String> {
+    fn pkg_exists(&self, pkgroots: &[String], pkgpath: &str) -> Option<String> {
         pkgroots
             .into_iter()
-            .find(|root| self.pkg_exists_in_path(root.to_string(), pkgpath))
+            .find(|root| self.pkg_exists_in_path(root, pkgpath))
+            .cloned()
     }
 
     /// Search for [`pkgpath`] under [`path`].
-    /// It only returns [`true`] if [`path`]/[`pkgpath`] or [`path`]/[`kcl.mod`] exists.
-    fn pkg_exists_in_path(&self, path: String, pkgpath: &str) -> bool {
+    /// It only returns [`true`] if [`path`]/[`pkgpath`] or [`path`]/[`pkgpath.k`] exists.
+    fn pkg_exists_in_path(&self, path: &str, pkgpath: &str) -> bool {
         let mut pathbuf = PathBuf::from(path);
         pkgpath.split('.').for_each(|s| pathbuf.push(s));
         pathbuf.exists() || pathbuf.with_extension(KCL_FILE_EXTENSION).exists()

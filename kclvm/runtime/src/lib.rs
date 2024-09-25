@@ -86,6 +86,8 @@ mod eval;
 pub mod datetime;
 pub use self::datetime::*;
 
+pub mod encoding;
+
 pub mod json;
 pub use self::json::*;
 
@@ -128,4 +130,4 @@ pub use self::_kclvm::*;
 pub mod _kclvm_addr;
 pub use self::_kclvm_addr::*;
 
-type IndexMap<K, V> = indexmap::IndexMap<K, V, ahash::RandomState>;
+pub type IndexMap<K, V> = indexmap::IndexMap<K, V, ahash::RandomState>;

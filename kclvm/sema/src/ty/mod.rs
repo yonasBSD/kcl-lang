@@ -89,6 +89,24 @@ impl Type {
         }
     }
 
+    pub fn ty_hint(&self) -> String {
+        match &self.kind {
+            TypeKind::StrLit(s) => format!("\"{}\"", s),
+            TypeKind::IntLit(v) => v.to_string(),
+            TypeKind::FloatLit(v) => v.to_string(),
+            TypeKind::List(item_ty) => format!("[{}]", item_ty.ty_hint()),
+            TypeKind::Dict(DictType { key_ty, val_ty, .. }) => {
+                format!("{{{}:{}}}", key_ty.ty_hint(), val_ty.ty_hint())
+            }
+            TypeKind::Union(types) => types
+                .iter()
+                .map(|ty| ty.ty_hint())
+                .collect::<Vec<String>>()
+                .join(" | "),
+            _ => self.ty_str(),
+        }
+    }
+
     /// Returns the full type string with the package path used for the error handler.
     pub fn full_ty_str(&self) -> String {
         match &self.kind {
@@ -259,11 +277,7 @@ impl SchemaType {
     }
     /// Get the object type string.
     pub fn full_ty_str(&self) -> String {
-        if self.pkgpath.is_empty() || self.pkgpath == MAIN_PKG {
-            self.name.clone()
-        } else {
-            format!("{}.{}", self.pkgpath, self.name)
-        }
+        full_ty_str(&self.pkgpath, &self.name)
     }
     /// Is `name` a schema member function
     pub fn is_member_functions(&self, name: &str) -> bool {
@@ -372,6 +386,14 @@ impl SchemaType {
             "".to_string()
         };
         format!("schema {}{}", self.name, params_str)
+    }
+}
+
+pub fn full_ty_str(pkgpath: &str, name: &str) -> String {
+    if pkgpath.is_empty() || pkgpath == MAIN_PKG {
+        name.to_string()
+    } else {
+        format!("{}.{}", pkgpath, name)
     }
 }
 
@@ -528,5 +550,6 @@ pub struct Parameter {
     pub name: String,
     pub ty: TypeRef,
     pub has_default: bool,
+    pub default_value: Option<String>,
     pub range: Range,
 }

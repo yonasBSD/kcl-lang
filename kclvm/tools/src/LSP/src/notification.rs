@@ -1,16 +1,18 @@
-use kclvm_config::{modfile::KCL_MOD_FILE, settings::DEFAULT_SETTING_FILE};
+use kclvm_config::{
+    modfile::{KCL_MOD_FILE, KCL_WORK_FILE},
+    settings::DEFAULT_SETTING_FILE,
+};
+use kclvm_driver::lookup_compile_workspaces;
 use lsp_types::notification::{
     Cancel, DidChangeTextDocument, DidChangeWatchedFiles, DidCloseTextDocument,
     DidOpenTextDocument, DidSaveTextDocument,
 };
-use std::path::Path;
+use std::{collections::HashSet, sync::Arc};
 
+use crate::util::apply_document_changes;
 use crate::{
-    dispatcher::NotificationDispatcher,
-    from_lsp,
+    analysis::OpenFileInfo, dispatcher::NotificationDispatcher, from_lsp,
     state::LanguageServerState,
-    util::apply_document_changes,
-    word_index::{build_word_index_with_content, word_index_add, word_index_subtract},
 };
 
 impl LanguageServerState {
@@ -34,7 +36,7 @@ impl LanguageServerState {
             lsp_types::NumberOrString::Number(id) => id.into(),
             lsp_types::NumberOrString::String(id) => id.into(),
         };
-        self.request_queue.incoming.complete(id);
+        self.request_queue.incoming.complete(&id);
         Ok(())
     }
 
@@ -45,16 +47,19 @@ impl LanguageServerState {
     ) -> anyhow::Result<()> {
         let path = from_lsp::abs_path(&params.text_document.uri)?;
         self.log_message(format!("on did open file: {:?}", path));
-
-        self.vfs.write().set_file_contents(
+        let mut vfs = self.vfs.write();
+        vfs.set_file_contents(
             path.clone().into(),
             Some(params.text_document.text.into_bytes()),
         );
-
-        if let Some(id) = self.vfs.read().file_id(&path.into()) {
-            self.opened_files
-                .write()
-                .insert(id, params.text_document.version);
+        if let Some(id) = vfs.file_id(&path.into()) {
+            self.opened_files.write().insert(
+                id,
+                OpenFileInfo {
+                    version: params.text_document.version,
+                    workspaces: HashSet::new(),
+                },
+            );
         }
         Ok(())
     }
@@ -94,25 +99,12 @@ impl LanguageServerState {
             .ok_or(anyhow::anyhow!("Already checked that the file_id exists!"))?;
 
         let mut text = String::from_utf8(vfs.file_contents(file_id).to_vec())?;
-        let old_text = text.clone();
         apply_document_changes(&mut text, content_changes);
         vfs.set_file_contents(path.into(), Some(text.clone().into_bytes()));
-        self.opened_files
-            .write()
-            .insert(file_id, text_document.version);
-        // Update word index
-        let old_word_index = build_word_index_with_content(&old_text, &text_document.uri, true);
-        let new_word_index = build_word_index_with_content(&text, &text_document.uri, true);
-        let binding = from_lsp::file_path_from_url(&text_document.uri)?;
-        let file_path = Path::new(&binding);
-        let word_index_map = &mut *self.word_index_map.write();
-        for (key, value) in word_index_map {
-            let workspace_folder_path = Path::new(key.path());
-            if file_path.starts_with(workspace_folder_path) {
-                word_index_subtract(value, old_word_index.clone());
-                word_index_add(value, new_word_index.clone());
-            }
-        }
+        let mut opened_files = self.opened_files.write();
+        let file_info = opened_files.get_mut(&file_id).unwrap();
+        file_info.version = text_document.version;
+        drop(opened_files);
 
         Ok(())
     }
@@ -147,6 +139,20 @@ impl LanguageServerState {
             self.loader.handle.invalidate(path.clone());
             if KCL_CONFIG_FILE.contains(&path.file_name().unwrap().to_str().unwrap()) {
                 self.entry_cache.write().clear();
+                let parent_path = path.parent().unwrap();
+                let path = parent_path.as_os_str().to_str().unwrap().to_string();
+                let tool = Arc::clone(&self.tool);
+                let (workspaces, failed) = lookup_compile_workspaces(&*tool.read(), &path, true);
+
+                if let Some(failed) = failed {
+                    for (key, err) in failed {
+                        self.log_message(format!("parse kcl.work failed: {}: {}", key, err));
+                    }
+                }
+
+                for (workspace, opts) in workspaces {
+                    self.async_compile(workspace, opts, None, false);
+                }
             }
         }
 
@@ -154,4 +160,4 @@ impl LanguageServerState {
     }
 }
 
-const KCL_CONFIG_FILE: [&str; 2] = [DEFAULT_SETTING_FILE, KCL_MOD_FILE];
+const KCL_CONFIG_FILE: [&str; 3] = [DEFAULT_SETTING_FILE, KCL_MOD_FILE, KCL_WORK_FILE];

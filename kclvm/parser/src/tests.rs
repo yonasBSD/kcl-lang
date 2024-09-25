@@ -4,6 +4,7 @@ use std::{
 };
 
 use compiler_base_span::{FilePathMapping, SourceMap};
+use entry::expand_input_files;
 use kclvm_config::modfile::{get_vendor_home, KCL_PKG_PATH};
 
 use crate::*;
@@ -376,8 +377,8 @@ pub fn test_import_vendor_without_vendor_home() {
             let errors = sess.classification().0;
             let msgs = [
                 "pkgpath assign not found in the program",
-                "try 'kcl mod add assign' to download the package not found",
-                "find more package on 'https://artifacthub.io'",
+                "try 'kcl mod add assign' to download the missing package",
+                "browse more packages at 'https://artifacthub.io'",
                 "pkgpath assign.assign not found in the program",
             ];
             assert_eq!(errors.len(), msgs.len());
@@ -400,8 +401,8 @@ pub fn test_import_vendor_without_vendor_home() {
             let errors = sess.classification().0;
             let msgs = [
                 "pkgpath assign not found in the program",
-                "try 'kcl mod add assign' to download the package not found",
-                "find more package on 'https://artifacthub.io'",
+                "try 'kcl mod add assign' to download the missing package",
+                "browse more packages at 'https://artifacthub.io'",
                 "pkgpath assign.assign not found in the program",
             ];
             assert_eq!(errors.len(), msgs.len());
@@ -724,8 +725,8 @@ pub fn test_pkg_not_found_suggestion() {
             let errors = sess.classification().0;
             let msgs = [
                 "pkgpath k9s not found in the program",
-                "try 'kcl mod add k9s' to download the package not found",
-                "find more package on 'https://artifacthub.io'",
+                "try 'kcl mod add k9s' to download the missing package",
+                "browse more packages at 'https://artifacthub.io'",
             ];
             assert_eq!(errors.len(), msgs.len());
             for (diag, m) in errors.iter().zip(msgs.iter()) {
@@ -736,4 +737,86 @@ pub fn test_pkg_not_found_suggestion() {
             panic!("Unreachable code.")
         }
     }
+}
+
+#[test]
+fn test_expand_input_files_with_kcl_mod() {
+    let path = PathBuf::from("testdata/expand_file_pattern");
+    let input_files = vec![
+        path.join("**").join("main.k").to_string_lossy().to_string(),
+        "${KCL_MOD}/testdata/expand_file_pattern/KCL_MOD".to_string(),
+    ];
+    let expected_files = vec![
+        path.join("kcl1/kcl2/main.k").to_string_lossy().to_string(),
+        path.join("kcl1/kcl4/main.k").to_string_lossy().to_string(),
+        path.join("kcl1/main.k").to_string_lossy().to_string(),
+        path.join("kcl3/main.k").to_string_lossy().to_string(),
+        path.join("main.k").to_string_lossy().to_string(),
+        "${KCL_MOD}/testdata/expand_file_pattern/KCL_MOD".to_string(),
+    ];
+    let got_paths: Vec<String> = expand_input_files(&input_files)
+        .iter()
+        .map(|s| s.replace(['/', '\\'], ""))
+        .collect();
+    let expect_paths: Vec<String> = expected_files
+        .iter()
+        .map(|s| s.replace(['/', '\\'], ""))
+        .collect();
+    assert_eq!(got_paths, expect_paths);
+}
+
+#[test]
+#[cfg(not(windows))]
+fn test_expand_input_files() {
+    let input_files = vec!["./testdata/expand_file_pattern/**/main.k".to_string()];
+    let mut expected_files = vec![
+        Path::new("testdata/expand_file_pattern/kcl1/kcl2/main.k")
+            .to_string_lossy()
+            .to_string(),
+        Path::new("testdata/expand_file_pattern/kcl3/main.k")
+            .to_string_lossy()
+            .to_string(),
+        Path::new("testdata/expand_file_pattern/main.k")
+            .to_string_lossy()
+            .to_string(),
+        Path::new("testdata/expand_file_pattern/kcl1/main.k")
+            .to_string_lossy()
+            .to_string(),
+        Path::new("testdata/expand_file_pattern/kcl1/kcl4/main.k")
+            .to_string_lossy()
+            .to_string(),
+    ];
+    expected_files.sort();
+    let mut input = expand_input_files(&input_files);
+    input.sort();
+    assert_eq!(input, expected_files);
+
+    let input_files = vec![
+        "./testdata/expand_file_pattern/kcl1/main.k".to_string(),
+        "./testdata/expand_file_pattern/**/main.k".to_string(),
+    ];
+    let mut expected_files = vec![
+        Path::new("testdata/expand_file_pattern/kcl1/main.k")
+            .to_string_lossy()
+            .to_string(),
+        Path::new("testdata/expand_file_pattern/kcl1/main.k")
+            .to_string_lossy()
+            .to_string(),
+        Path::new("testdata/expand_file_pattern/kcl1/kcl2/main.k")
+            .to_string_lossy()
+            .to_string(),
+        Path::new("testdata/expand_file_pattern/kcl1/kcl4/main.k")
+            .to_string_lossy()
+            .to_string(),
+        Path::new("testdata/expand_file_pattern/kcl3/main.k")
+            .to_string_lossy()
+            .to_string(),
+        Path::new("testdata/expand_file_pattern/main.k")
+            .to_string_lossy()
+            .to_string(),
+    ];
+    expected_files.sort();
+    let mut input = expand_input_files(&input_files);
+    input.sort();
+    assert_eq!(input, expected_files);
 }

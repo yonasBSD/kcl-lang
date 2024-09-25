@@ -234,7 +234,7 @@ pub fn get_call_arg(
 }
 
 #[inline]
-pub(crate) fn get_call_arg_str(
+pub fn get_call_arg_str(
     args: &ValueRef,
     kwargs: &ValueRef,
     index: usize,
@@ -244,13 +244,33 @@ pub(crate) fn get_call_arg_str(
 }
 
 #[inline]
-pub(crate) fn get_call_arg_bool(
+pub fn get_call_arg_bool(
     args: &ValueRef,
     kwargs: &ValueRef,
     index: usize,
     key: Option<&str>,
 ) -> Option<bool> {
     get_call_arg(args, kwargs, index, key).map(|v| v.as_bool())
+}
+
+#[inline]
+pub fn get_call_arg_int(
+    args: &ValueRef,
+    kwargs: &ValueRef,
+    index: usize,
+    key: Option<&str>,
+) -> Option<i64> {
+    get_call_arg(args, kwargs, index, key).map(|v| v.must_as_strict_int())
+}
+
+#[inline]
+pub fn get_call_arg_num(
+    args: &ValueRef,
+    kwargs: &ValueRef,
+    index: usize,
+    key: Option<&str>,
+) -> Option<f64> {
+    get_call_arg(args, kwargs, index, key).map(|v| v.as_num())
 }
 
 #[cfg(test)]

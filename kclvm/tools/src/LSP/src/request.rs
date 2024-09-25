@@ -2,15 +2,14 @@ use anyhow::anyhow;
 use crossbeam_channel::Sender;
 
 use kclvm_sema::info::is_valid_kcl_name;
-use lsp_server::RequestId;
 use lsp_types::{Location, SemanticTokensResult, TextEdit};
-use ra_ap_vfs::{AbsPathBuf, VfsPath};
+use ra_ap_vfs::VfsPath;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
 use crate::{
-    analysis::{AnalysisDatabase, DocumentVersion},
+    analysis::{AnalysisDatabase, DBState},
     completion::completion,
     dispatcher::RequestDispatcher,
     document_symbol::document_symbol,
@@ -73,7 +72,7 @@ impl LanguageServerState {
 impl LanguageServerSnapshot {
     // defend against non-kcl files
     pub(crate) fn verify_request_path(&self, path: &VfsPath, sender: &Sender<Task>) -> bool {
-        self.verify_vfs(path, sender) && self.verify_db(path, sender)
+        self.verify_vfs(path, sender)
     }
 
     pub(crate) fn verify_vfs(&self, path: &VfsPath, sender: &Sender<Task>) -> bool {
@@ -87,75 +86,100 @@ impl LanguageServerSnapshot {
         valid
     }
 
-    pub(crate) fn verify_db(&self, path: &VfsPath, sender: &Sender<Task>) -> bool {
-        let valid = self
-            .db
-            .read()
-            .get(&self.vfs.read().file_id(path).unwrap())
-            .is_some();
-        if !valid {
-            let _ = log_message(
-                format!(
-                    "LSP AnalysisDatabase not contains: {}, request failed",
-                    path
-                ),
-                sender,
-            );
-        }
-        valid
-    }
-
     /// Attempts to get db in cache, this function does not block.
-    /// db.contains(file_id) && db.get(file_id).is_some() -> Compile completed
-    /// db.contains(file_id) && db.get(file_id).is_none() -> In compiling, retry to wait compile completed
-    /// !db.contains(file_id) ->  Compile failed
+    /// return Ok(Some(db)) -> Compile completed
+    /// return Ok(None) -> In compiling or rw lock, retry to wait compile completed
+    /// return Err(_) ->  Compile failed
     pub(crate) fn try_get_db(
         &self,
         path: &VfsPath,
+        sender: &Sender<Task>,
     ) -> anyhow::Result<Option<Arc<AnalysisDatabase>>> {
+        match self.try_get_db_state(path) {
+            Ok(db) => match db {
+                Some(db) => match db {
+                    DBState::Ready(db) => Ok(Some(db.clone())),
+                    DBState::Compiling(_) | DBState::Init => {
+                        log_message(
+                            format!("Try get {:?} db state: In compiling, retry", path),
+                            sender,
+                        )?;
+                        Ok(None)
+                    }
+                    DBState::Failed(e) => {
+                        log_message(
+                            format!("Try get {:?} db state: Failed: {:?}", path, e),
+                            sender,
+                        )?;
+                        Err(anyhow::anyhow!(e))
+                    }
+                },
+                None => Ok(None),
+            },
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Attempts to get db in cache, this function does not block.
+    /// return Ok(Some(db)) -> Compile completed
+    /// return Ok(None) -> RWlock, retry to unlock
+    /// return Err(_) ->  Compile failed
+    pub(crate) fn try_get_db_state(&self, path: &VfsPath) -> anyhow::Result<Option<DBState>> {
         match self.vfs.try_read() {
             Some(vfs) => match vfs.file_id(path) {
-                Some(file_id) => match self.db.try_read() {
-                    Some(db) => match db.get(&file_id) {
-                        Some(db) => Ok(db.clone()),
-                        None => Err(anyhow::anyhow!(LSPError::AnalysisDatabaseNotFound(
-                            path.clone()
-                        ))),
-                    },
-                    None => Ok(None),
-                },
+                Some(file_id) => {
+                    let open_file = self.opened_files.read();
+                    let file_info = open_file.get(&file_id).unwrap();
+                    match self.temporary_workspace.read().get(&file_id) {
+                        Some(option_workspace) => match option_workspace {
+                            Some(work_space) => match self.workspaces.try_read() {
+                                Some(workspaces) => match workspaces.get(work_space) {
+                                    Some(db) => Ok(Some(db.clone())),
+                                    None => Err(anyhow::anyhow!(
+                                        LSPError::AnalysisDatabaseNotFound(path.clone())
+                                    )),
+                                },
+                                None => Ok(None),
+                            },
+                            None => Ok(None),
+                        },
+
+                        None => {
+                            if file_info.workspaces.is_empty() {
+                                return Err(anyhow::anyhow!(LSPError::WorkSpaceIsEmpty(
+                                    path.clone()
+                                )));
+                            }
+                            // todo: now just get first, need get all workspaces
+                            let work_space = file_info.workspaces.iter().next().unwrap();
+                            match self.workspaces.try_read() {
+                                Some(workspaces) => match workspaces.get(work_space) {
+                                    Some(db) => Ok(Some(db.clone())),
+                                    None => Err(anyhow::anyhow!(
+                                        LSPError::AnalysisDatabaseNotFound(path.clone())
+                                    )),
+                                },
+                                None => Ok(None),
+                            }
+                        }
+                    }
+                }
+
                 None => Err(anyhow::anyhow!(LSPError::FileIdNotFound(path.clone()))),
             },
             None => Ok(None),
         }
-    }
-
-    fn verify_request_version(
-        &self,
-        db_version: DocumentVersion,
-        path: &AbsPathBuf,
-    ) -> anyhow::Result<bool> {
-        let file_id = self
-            .vfs
-            .read()
-            .file_id(&path.clone().into())
-            .ok_or_else(|| anyhow::anyhow!(LSPError::FileIdNotFound(path.clone().into())))?;
-
-        let current_version = *self.opened_files.read().get(&file_id).ok_or_else(|| {
-            anyhow::anyhow!(LSPError::DocumentVersionNotFound(path.clone().into()))
-        })?;
-        Ok(db_version == current_version)
     }
 }
 
 pub(crate) fn handle_semantic_tokens_full(
     snapshot: LanguageServerSnapshot,
     params: lsp_types::SemanticTokensParams,
-    _sender: Sender<Task>,
+    sender: Sender<Task>,
 ) -> anyhow::Result<Option<SemanticTokensResult>> {
     let file = file_path_from_url(&params.text_document.uri)?;
-    let path = from_lsp::abs_path(&params.text_document.uri)?;
-    let db = match snapshot.try_get_db(&path.clone().into()) {
+    let path: VfsPath = from_lsp::abs_path(&params.text_document.uri)?.into();
+    let db = match snapshot.try_get_db(&path, &sender) {
         Ok(option_db) => match option_db {
             Some(db) => db,
             None => return Err(anyhow!(LSPError::Retry)),
@@ -164,9 +188,6 @@ pub(crate) fn handle_semantic_tokens_full(
     };
     let res = semantic_tokens_full(&file, &db.gs);
 
-    if !snapshot.verify_request_version(db.version, &path)? {
-        return Err(anyhow!(LSPError::Retry));
-    }
     Ok(res)
 }
 
@@ -235,8 +256,8 @@ pub(crate) fn handle_goto_definition(
     let path = from_lsp::abs_path(&params.text_document_position_params.text_document.uri)?;
     if !snapshot.verify_request_path(&path.clone().into(), &sender) {
         return Ok(None);
-    }
-    let db = match snapshot.try_get_db(&path.clone().into()) {
+    };
+    let db = match snapshot.try_get_db(&path.clone().into(), &sender) {
         Ok(option_db) => match option_db {
             Some(db) => db,
             None => return Err(anyhow!(LSPError::Retry)),
@@ -257,7 +278,6 @@ pub(crate) fn handle_reference(
     params: lsp_types::ReferenceParams,
     sender: Sender<Task>,
 ) -> anyhow::Result<Option<Vec<Location>>> {
-    let include_declaration = params.context.include_declaration;
     let file = file_path_from_url(&params.text_document_position.text_document.uri)?;
 
     let path = from_lsp::abs_path(&params.text_document_position.text_document.uri)?;
@@ -265,7 +285,7 @@ pub(crate) fn handle_reference(
     if !snapshot.verify_request_path(&path.clone().into(), &sender) {
         return Ok(None);
     }
-    let db = match snapshot.try_get_db(&path.clone().into()) {
+    let db = match snapshot.try_get_db(&path.clone().into(), &sender) {
         Ok(option_db) => match option_db {
             Some(db) => db,
             None => return Err(anyhow!(LSPError::Retry)),
@@ -273,23 +293,8 @@ pub(crate) fn handle_reference(
         Err(_) => return Ok(None),
     };
     let pos = kcl_pos(&file, params.text_document_position.position);
-    let log = |msg: String| log_message(msg, &sender);
-    let entry_cache = snapshot.entry_cache.clone();
-    match find_refs(
-        &pos,
-        include_declaration,
-        snapshot.word_index_map.clone(),
-        Some(snapshot.vfs.clone()),
-        log,
-        &db.gs,
-        Some(entry_cache),
-    ) {
-        core::result::Result::Ok(locations) => Ok(Some(locations)),
-        Err(msg) => {
-            log(format!("Find references failed: {msg}"))?;
-            Ok(None)
-        }
-    }
+    let res = find_refs(&pos, &db.gs);
+    Ok(res)
 }
 
 /// Called when a `textDocument/completion` request was received.
@@ -297,16 +302,16 @@ pub(crate) fn handle_completion(
     snapshot: LanguageServerSnapshot,
     params: lsp_types::CompletionParams,
     sender: Sender<Task>,
-    id: RequestId,
 ) -> anyhow::Result<Option<lsp_types::CompletionResponse>> {
     let file = file_path_from_url(&params.text_document_position.text_document.uri)?;
-    let path = from_lsp::abs_path(&params.text_document_position.text_document.uri)?;
+    let path: VfsPath =
+        from_lsp::abs_path(&params.text_document_position.text_document.uri)?.into();
     if !snapshot.verify_request_path(&path.clone().into(), &sender) {
         return Ok(None);
     }
 
-    let db = match snapshot.try_get_db(&path.clone().into()) {
-        Ok(option_db) => match option_db {
+    let db_state = match snapshot.try_get_db_state(&path) {
+        Ok(option_state) => match option_state {
             Some(db) => db,
             None => return Err(anyhow!(LSPError::Retry)),
         },
@@ -319,12 +324,19 @@ pub(crate) fn handle_completion(
         .and_then(|s| s.chars().next());
 
     if matches!(completion_trigger_character, Some('\n')) {
-        if snapshot.request_retry.read().get(&id).is_none() {
-            return Err(anyhow!(LSPError::Retry));
-        } else if !snapshot.verify_request_version(db.version, &path)? {
-            return Err(anyhow!(LSPError::Retry));
+        match db_state {
+            DBState::Compiling(_) | DBState::Init => return Err(anyhow!(LSPError::Retry)),
+            DBState::Failed(_) => return Ok(None),
+            _ => {}
         }
     }
+
+    let db = match db_state {
+        DBState::Ready(db) => db,
+        DBState::Compiling(db) => db,
+        DBState::Init => return Err(anyhow!(LSPError::Retry)),
+        DBState::Failed(_) => return Ok(None),
+    };
 
     let kcl_pos = kcl_pos(&file, params.text_document_position.position);
 
@@ -360,7 +372,7 @@ pub(crate) fn handle_hover(
     if !snapshot.verify_request_path(&path.clone().into(), &sender) {
         return Ok(None);
     }
-    let db = match snapshot.try_get_db(&path.clone().into()) {
+    let db = match snapshot.try_get_db(&path.clone().into(), &sender) {
         Ok(option_db) => match option_db {
             Some(db) => db,
             None => return Err(anyhow!(LSPError::Retry)),
@@ -379,11 +391,11 @@ pub(crate) fn handle_hover(
 pub(crate) fn handle_document_symbol(
     snapshot: LanguageServerSnapshot,
     params: lsp_types::DocumentSymbolParams,
-    _sender: Sender<Task>,
+    sender: Sender<Task>,
 ) -> anyhow::Result<Option<lsp_types::DocumentSymbolResponse>> {
     let file = file_path_from_url(&params.text_document.uri)?;
     let path = from_lsp::abs_path(&params.text_document.uri)?;
-    let db = match snapshot.try_get_db(&path.clone().into()) {
+    let db = match snapshot.try_get_db(&path.clone().into(), &sender) {
         Ok(option_db) => match option_db {
             Some(db) => db,
             None => return Err(anyhow!(LSPError::Retry)),
@@ -391,11 +403,6 @@ pub(crate) fn handle_document_symbol(
         Err(_) => return Ok(None),
     };
     let res = document_symbol(&file, &db.gs);
-
-    if !snapshot.verify_request_version(db.version, &path)? {
-        return Err(anyhow!(LSPError::Retry));
-    }
-
     Ok(res)
 }
 
@@ -417,7 +424,7 @@ pub(crate) fn handle_rename(
     if !snapshot.verify_request_path(&path.clone().into(), &sender) {
         return Ok(None);
     }
-    let db = match snapshot.try_get_db(&path.clone().into()) {
+    let db = match snapshot.try_get_db(&path.clone().into(), &sender) {
         Ok(option_db) => match option_db {
             Some(db) => db,
             None => return Err(anyhow!(LSPError::Retry)),
@@ -425,56 +432,37 @@ pub(crate) fn handle_rename(
         Err(_) => return Ok(None),
     };
     let kcl_pos = kcl_pos(&file, params.text_document_position.position);
-    let log = |msg: String| log_message(msg, &sender);
-    let references = find_refs(
-        &kcl_pos,
-        true,
-        snapshot.word_index_map.clone(),
-        Some(snapshot.vfs.clone()),
-        log,
-        &db.gs,
-        Some(snapshot.entry_cache),
-    );
+    let references = find_refs(&kcl_pos, &db.gs);
     match references {
-        Result::Ok(locations) => {
-            if locations.is_empty() {
-                let _ = log("Symbol not found".to_string());
-                anyhow::Ok(None)
-            } else {
-                // 3. return the workspaceEdit to rename all the references with the new name
-                let mut workspace_edit = lsp_types::WorkspaceEdit::default();
-
-                let changes = locations.into_iter().fold(
-                    HashMap::new(),
-                    |mut map: HashMap<lsp_types::Url, Vec<TextEdit>>, location| {
-                        let uri = location.uri;
-                        map.entry(uri.clone()).or_default().push(TextEdit {
-                            range: location.range,
-                            new_text: new_name.clone(),
-                        });
-                        map
-                    },
-                );
-                workspace_edit.changes = Some(changes);
-                anyhow::Ok(Some(workspace_edit))
-            }
+        Some(locations) => {
+            let mut workspace_edit = lsp_types::WorkspaceEdit::default();
+            let changes = locations.into_iter().fold(
+                HashMap::new(),
+                |mut map: HashMap<lsp_types::Url, Vec<TextEdit>>, location| {
+                    let uri = location.uri;
+                    map.entry(uri.clone()).or_default().push(TextEdit {
+                        range: location.range,
+                        new_text: new_name.clone(),
+                    });
+                    map
+                },
+            );
+            workspace_edit.changes = Some(changes);
+            return anyhow::Ok(Some(workspace_edit));
         }
-        Err(msg) => {
-            let err_msg = format!("Can not rename symbol: {msg}");
-            log(err_msg.clone())?;
-            Err(anyhow!(err_msg))
-        }
+        None => {}
     }
+    Ok(None)
 }
 
 pub(crate) fn handle_inlay_hint(
     snapshot: LanguageServerSnapshot,
     params: lsp_types::InlayHintParams,
-    _sender: Sender<Task>,
+    sender: Sender<Task>,
 ) -> anyhow::Result<Option<Vec<lsp_types::InlayHint>>> {
     let file = file_path_from_url(&params.text_document.uri)?;
     let path = from_lsp::abs_path(&params.text_document.uri)?;
-    let db = match snapshot.try_get_db(&path.clone().into()) {
+    let db = match snapshot.try_get_db(&path.clone().into(), &sender) {
         Ok(option_db) => match option_db {
             Some(db) => db,
             None => return Err(anyhow!(LSPError::Retry)),
@@ -482,23 +470,19 @@ pub(crate) fn handle_inlay_hint(
         Err(_) => return Ok(None),
     };
     let res = inlay_hints(&file, &db.gs);
-
-    if !snapshot.verify_request_version(db.version, &path)? {
-        return Err(anyhow!(LSPError::Retry));
-    }
     Ok(res)
 }
 
 pub(crate) fn handle_signature_help(
     snapshot: LanguageServerSnapshot,
     params: lsp_types::SignatureHelpParams,
-    _sender: Sender<Task>,
+    sender: Sender<Task>,
 ) -> anyhow::Result<Option<lsp_types::SignatureHelp>> {
     let file = file_path_from_url(&params.text_document_position_params.text_document.uri)?;
     let pos = kcl_pos(&file, params.text_document_position_params.position);
     let trigger_character = params.context.and_then(|ctx| ctx.trigger_character);
     let path = from_lsp::abs_path(&params.text_document_position_params.text_document.uri)?;
-    let db = match snapshot.try_get_db(&path.clone().into()) {
+    let db = match snapshot.try_get_db(&path.clone().into(), &sender) {
         Ok(option_db) => match option_db {
             Some(db) => db,
             None => return Err(anyhow!(LSPError::Retry)),

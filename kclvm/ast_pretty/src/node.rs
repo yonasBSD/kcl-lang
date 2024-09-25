@@ -228,7 +228,7 @@ impl<'p, 'ctx> MutSelfTypedResultWalker<'ctx> for Printer<'p> {
                 self.write_token(TokenKind::DotDotDot);
             }
             if let Some(key_name) = &index_signature.node.key_name {
-                self.write(&format!("{}: ", key_name));
+                self.write(&format!("{}: ", key_name.node));
             }
             self.write(&index_signature.node.key_ty.node.to_string());
             self.write_token(TokenKind::CloseDelim(DelimToken::Bracket));
@@ -513,8 +513,9 @@ impl<'p, 'ctx> MutSelfTypedResultWalker<'ctx> for Printer<'p> {
             |expr| self.expr(expr),
             list_if_item_expr.exprs
         );
-        self.write_indentation(Indentation::DedentWithNewline);
+        self.write_indentation(Indentation::Dedent);
         if let Some(orelse) = &list_if_item_expr.orelse {
+            self.write_newline();
             match &orelse.node {
                 ast::Expr::List(list_expr) => {
                     self.write("else:");
@@ -571,8 +572,9 @@ impl<'p, 'ctx> MutSelfTypedResultWalker<'ctx> for Printer<'p> {
             |entry: &ast::NodeRef<ast::ConfigEntry>| self.write_entry(entry),
             config_if_entry_expr.items
         );
-        self.write_indentation(Indentation::DedentWithNewline);
+        self.write_indentation(Indentation::Dedent);
         if let Some(orelse) = &config_if_entry_expr.orelse {
+            self.write_newline();
             match &orelse.node {
                 ast::Expr::Config(config_expr) => {
                     self.write("else:");

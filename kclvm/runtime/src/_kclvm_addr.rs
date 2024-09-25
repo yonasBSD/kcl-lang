@@ -17,6 +17,7 @@ pub fn _kclvm_get_fn_ptr_by_name(name: &str) -> u64 {
         "kclvm_builtin_float" => crate::kclvm_builtin_float as *const () as u64,
         "kclvm_builtin_hex" => crate::kclvm_builtin_hex as *const () as u64,
         "kclvm_builtin_int" => crate::kclvm_builtin_int as *const () as u64,
+        "kclvm_builtin_isnullish" => crate::kclvm_builtin_isnullish as *const () as u64,
         "kclvm_builtin_isunique" => crate::kclvm_builtin_isunique as *const () as u64,
         "kclvm_builtin_len" => crate::kclvm_builtin_len as *const () as u64,
         "kclvm_builtin_list" => crate::kclvm_builtin_list as *const () as u64,
@@ -105,6 +106,7 @@ pub fn _kclvm_get_fn_ptr_by_name(name: &str) -> u64 {
         "kclvm_convert_collection_value" => {
             crate::kclvm_convert_collection_value as *const () as u64
         }
+        "kclvm_crypto_blake3" => crate::kclvm_crypto_blake3 as *const () as u64,
         "kclvm_crypto_filesha256" => crate::kclvm_crypto_filesha256 as *const () as u64,
         "kclvm_crypto_md5" => crate::kclvm_crypto_md5 as *const () as u64,
         "kclvm_crypto_sha1" => crate::kclvm_crypto_sha1 as *const () as u64,
@@ -117,6 +119,7 @@ pub fn _kclvm_get_fn_ptr_by_name(name: &str) -> u64 {
         "kclvm_datetime_now" => crate::kclvm_datetime_now as *const () as u64,
         "kclvm_datetime_ticks" => crate::kclvm_datetime_ticks as *const () as u64,
         "kclvm_datetime_today" => crate::kclvm_datetime_today as *const () as u64,
+        "kclvm_datetime_validate" => crate::kclvm_datetime_validate as *const () as u64,
         "kclvm_default_collection_insert_int_pointer" => {
             crate::kclvm_default_collection_insert_int_pointer as *const () as u64
         }

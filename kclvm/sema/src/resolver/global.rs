@@ -4,8 +4,8 @@ use std::sync::Arc;
 use crate::info::is_private_field;
 use crate::resolver::Resolver;
 use crate::ty::{
-    is_upper_bound, DecoratorTarget, FunctionType, Parameter, SchemaAttr, SchemaIndexSignature,
-    SchemaType, Type, TypeKind, RESERVED_TYPE_IDENTIFIERS,
+    full_ty_str, is_upper_bound, DecoratorTarget, FunctionType, Parameter, SchemaAttr,
+    SchemaIndexSignature, SchemaType, Type, TypeKind, RESERVED_TYPE_IDENTIFIERS,
 };
 use indexmap::IndexMap;
 use kclvm_ast::ast;
@@ -63,7 +63,6 @@ impl<'ctx> Resolver<'ctx> {
                                 false,
                                 true,
                             ),
-
                             _ => continue,
                         };
                         if self.contains_object(name) {
@@ -511,13 +510,13 @@ impl<'ctx> Resolver<'ctx> {
             .collect();
         let index_signature = if let Some(index_signature) = &schema_stmt.index_signature {
             if let Some(index_sign_name) = &index_signature.node.key_name {
-                if schema_attr_names.contains(index_sign_name) {
+                if schema_attr_names.contains(&index_sign_name.node) {
                     self.handler.add_error(
                         ErrorKind::IndexSignatureError,
                         &[Message {
                             range: index_signature.get_span_pos(),
                             style: Style::LineAndColumn,
-                            message: format!("index signature attribute name '{}' cannot have the same name as schema attributes", index_sign_name),
+                            message: format!("index signature attribute name '{}' cannot have the same name as schema attributes", index_sign_name.node),
                             note: None,
                             suggested_replacement: None,
                         }],
@@ -549,7 +548,7 @@ impl<'ctx> Resolver<'ctx> {
                 );
             }
             Some(Box::new(SchemaIndexSignature {
-                key_name: index_signature.node.key_name.clone(),
+                key_name: index_signature.node.key_name.clone().map(|n| n.node),
                 key_ty,
                 val_ty,
                 any_other: index_signature.node.any_other,
@@ -753,26 +752,51 @@ impl<'ctx> Resolver<'ctx> {
                     name,
                     ty: ty.clone(),
                     has_default: args.node.defaults.get(i).map_or(false, |arg| arg.is_some()),
+                    default_value: args.node.defaults.get(i).map_or(None, |arg| {
+                        arg.as_ref().map(|v| print_ast_node(ASTNode::Expr(&v)))
+                    }),
                     range: args.node.args[i].get_span_pos(),
                 });
             }
         }
-        let schema_runtime_ty = kclvm_runtime::schema_runtime_type(name, &self.ctx.pkgpath);
+
+        let schema_full_ty_str = full_ty_str(&self.ctx.pkgpath, name);
+
         if should_add_schema_ref {
             if let Some(ref parent_ty) = parent_ty {
-                let parent_schema_runtime_ty =
-                    kclvm_runtime::schema_runtime_type(&parent_ty.name, &parent_ty.pkgpath);
-                self.ctx
-                    .ty_ctx
-                    .add_dependencies(&schema_runtime_ty, &parent_schema_runtime_ty);
-                if self.ctx.ty_ctx.is_cyclic() {
-                    self.handler.add_compile_error(
-                        &format!(
-                            "There is a circular reference between schema {} and {}",
-                            name, parent_ty.name,
-                        ),
-                        schema_stmt.get_span_pos(),
-                    );
+                let parent_full_ty_str = parent_ty.full_ty_str();
+                self.ctx.ty_ctx.add_dependencies(
+                    &schema_full_ty_str,
+                    &parent_full_ty_str,
+                    schema_stmt.name.get_span_pos(),
+                );
+
+                if self.ctx.ty_ctx.is_cyclic_from_node(&schema_full_ty_str) {
+                    let cycles = self.ctx.ty_ctx.find_cycle_nodes(&schema_full_ty_str);
+                    for cycle in cycles {
+                        let node_names: Vec<String> = cycle
+                            .iter()
+                            .map(|idx| {
+                                if let Some(name) = self.ctx.ty_ctx.dep_graph.node_weight(*idx) {
+                                    name.clone()
+                                } else {
+                                    "".to_string()
+                                }
+                            })
+                            .filter(|name| !name.is_empty())
+                            .collect();
+                        for node in &cycle {
+                            if let Some(range) = self.ctx.ty_ctx.get_node_range(node) {
+                                self.handler.add_compile_error(
+                                    &format!(
+                                        "There is a circular reference between schemas {}",
+                                        node_names.join(", "),
+                                    ),
+                                    range,
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -806,6 +830,7 @@ impl<'ctx> Resolver<'ctx> {
             index_signature,
             decorators,
         };
+        let schema_runtime_ty = kclvm_runtime::schema_runtime_type(name, &self.ctx.pkgpath);
         self.ctx
             .schema_mapping
             .insert(schema_runtime_ty, Arc::new(RefCell::new(schema_ty.clone())));
@@ -865,26 +890,49 @@ impl<'ctx> Resolver<'ctx> {
                     name,
                     ty: ty.clone(),
                     has_default: args.node.defaults.get(i).is_some(),
+                    default_value: args.node.defaults.get(i).map_or(None, |arg| {
+                        arg.as_ref().map(|v| print_ast_node(ASTNode::Expr(&v)))
+                    }),
                     range: args.node.args[i].get_span_pos(),
                 });
             }
         }
         if should_add_schema_ref {
-            let schema_runtime_ty = kclvm_runtime::schema_runtime_type(name, &self.ctx.pkgpath);
+            let schema_full_ty_str = full_ty_str(&self.ctx.pkgpath, &name);
+
             for parent_ty in &parent_types {
-                let parent_schema_runtime_ty =
-                    kclvm_runtime::schema_runtime_type(&parent_ty.name, &parent_ty.pkgpath);
-                self.ctx
-                    .ty_ctx
-                    .add_dependencies(&schema_runtime_ty, &parent_schema_runtime_ty);
-                if self.ctx.ty_ctx.is_cyclic() {
-                    self.handler.add_compile_error(
-                        &format!(
-                            "There is a circular reference between rule {} and {}",
-                            name, parent_ty.name,
-                        ),
-                        rule_stmt.get_span_pos(),
-                    );
+                let parent_full_ty_str = parent_ty.full_ty_str();
+                self.ctx.ty_ctx.add_dependencies(
+                    &schema_full_ty_str,
+                    &parent_full_ty_str,
+                    rule_stmt.name.get_span_pos(),
+                );
+                if self.ctx.ty_ctx.is_cyclic_from_node(&schema_full_ty_str) {
+                    let cycles = self.ctx.ty_ctx.find_cycle_nodes(&schema_full_ty_str);
+                    for cycle in cycles {
+                        let node_names: Vec<String> = cycle
+                            .iter()
+                            .map(|idx| {
+                                if let Some(name) = self.ctx.ty_ctx.dep_graph.node_weight(*idx) {
+                                    name.clone()
+                                } else {
+                                    "".to_string()
+                                }
+                            })
+                            .filter(|name| !name.is_empty())
+                            .collect();
+                        for node in &cycle {
+                            if let Some(range) = self.ctx.ty_ctx.get_node_range(node) {
+                                self.handler.add_compile_error(
+                                    &format!(
+                                        "There is a circular reference between rules {}",
+                                        node_names.join(", "),
+                                    ),
+                                    range,
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }

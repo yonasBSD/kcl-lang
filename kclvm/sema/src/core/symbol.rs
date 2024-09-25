@@ -22,6 +22,7 @@ pub trait Symbol {
     fn get_range(&self) -> Range;
     fn get_owner(&self) -> Option<SymbolRef>;
     fn get_definition(&self) -> Option<SymbolRef>;
+    fn get_references(&self) -> HashSet<SymbolRef>;
     fn get_name(&self) -> String;
     fn get_id(&self) -> Option<SymbolRef>;
     fn get_attribute(
@@ -897,6 +898,76 @@ impl SymbolData {
             self.remove_symbol(&symbol);
         }
     }
+
+    pub fn set_def_and_ref(&mut self, def: SymbolRef, r#ref: SymbolRef) {
+        self.set_def(def, r#ref);
+        self.set_ref(def, r#ref);
+    }
+
+    pub fn set_def(&mut self, def: SymbolRef, r#ref: SymbolRef) {
+        match r#ref.get_kind() {
+            SymbolKind::Unresolved => {
+                self.unresolved.get_mut(r#ref.get_id()).unwrap().def = Some(def)
+            }
+            _ => {}
+        }
+    }
+
+    pub fn set_ref(&mut self, def: SymbolRef, r#ref: SymbolRef) {
+        match def.get_kind() {
+            SymbolKind::Schema => {
+                self.schemas
+                    .get_mut(def.get_id())
+                    .unwrap()
+                    .r#ref
+                    .insert(r#ref);
+            }
+
+            SymbolKind::Attribute => {
+                self.attributes
+                    .get_mut(def.get_id())
+                    .unwrap()
+                    .r#ref
+                    .insert(r#ref);
+            }
+            SymbolKind::Value => {
+                self.values
+                    .get_mut(def.get_id())
+                    .unwrap()
+                    .r#ref
+                    .insert(r#ref);
+            }
+            SymbolKind::Function => {
+                self.functions
+                    .get_mut(def.get_id())
+                    .unwrap()
+                    .r#ref
+                    .insert(r#ref);
+            }
+            SymbolKind::Package => {
+                self.packages
+                    .get_mut(def.get_id())
+                    .unwrap()
+                    .r#ref
+                    .insert(r#ref);
+            }
+            SymbolKind::TypeAlias => {
+                self.type_aliases
+                    .get_mut(def.get_id())
+                    .unwrap()
+                    .r#ref
+                    .insert(r#ref);
+            }
+            SymbolKind::Rule => {
+                self.rules
+                    .get_mut(def.get_id())
+                    .unwrap()
+                    .r#ref
+                    .insert(r#ref);
+            }
+            _ => {}
+        };
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -962,6 +1033,7 @@ pub struct SchemaSymbol {
     pub(crate) end: Position,
     pub(crate) owner: SymbolRef,
     pub(crate) sema_info: SymbolSemanticInfo,
+    pub(crate) r#ref: HashSet<SymbolRef>,
 
     pub(crate) parent_schema: Option<SymbolRef>,
     pub(crate) for_host: Option<SymbolRef>,
@@ -1006,15 +1078,6 @@ impl Symbol for SchemaSymbol {
         match self.attributes.get(name) {
             Some(attribute) => Some(*attribute),
             None => {
-                if let Some(parent_schema) = self.parent_schema {
-                    if let Some(attribute) =
-                        data.get_symbol(parent_schema)?
-                            .get_attribute(name, data, module_info)
-                    {
-                        return Some(attribute);
-                    }
-                }
-
                 if let Some(for_host) = self.for_host {
                     if let Some(attribute) =
                         data.get_symbol(for_host)?
@@ -1033,6 +1096,25 @@ impl Symbol for SchemaSymbol {
                     }
                 }
 
+                if let Some(_) = self.parent_schema {
+                    let mut parents = vec![];
+                    parents.push(self.id.unwrap());
+                    self.get_parents(data, &mut parents);
+                    if parents.len() > 1 {
+                        for parent_schema in &parents[1..] {
+                            if let Some(parent_schema) = data.get_schema_symbol(*parent_schema) {
+                                let parent_attr = parent_schema.get_self_attr(data, module_info);
+                                for attr in parent_attr {
+                                    if let Some(attribute) = data.get_symbol(attr) {
+                                        if attribute.get_name() == name {
+                                            return Some(attr);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 None
             }
         }
@@ -1043,24 +1125,17 @@ impl Symbol for SchemaSymbol {
         data: &Self::SymbolData,
         module_info: Option<&ModuleInfo>,
     ) -> Vec<SymbolRef> {
-        let mut result = vec![];
-        for attribute in self.attributes.values() {
-            result.push(*attribute);
-        }
-        if let Some(parent_schema) = self.parent_schema {
-            if let Some(parent) = data.get_symbol(parent_schema) {
-                result.append(&mut parent.get_all_attributes(data, module_info))
-            }
-        }
-
-        if let Some(for_host) = self.for_host {
-            if let Some(for_host) = data.get_symbol(for_host) {
-                result.append(&mut for_host.get_all_attributes(data, module_info))
-            }
-        }
-        for mixin in self.mixins.iter() {
-            if let Some(mixin) = data.get_symbol(*mixin) {
-                result.append(&mut mixin.get_all_attributes(data, module_info))
+        let mut result = self.get_self_attr(data, module_info);
+        if let Some(_) = self.parent_schema {
+            let mut parents = vec![];
+            parents.push(self.id.unwrap());
+            self.get_parents(data, &mut parents);
+            if parents.len() > 1 {
+                for parent in &parents[1..] {
+                    if let Some(schema_symbol) = data.get_schema_symbol(*parent) {
+                        result.append(&mut schema_symbol.get_self_attr(data, module_info))
+                    }
+                }
             }
         }
         result
@@ -1139,6 +1214,10 @@ impl Symbol for SchemaSymbol {
     fn get_sema_info(&self) -> &Self::SemanticInfo {
         &self.sema_info
     }
+
+    fn get_references(&self) -> HashSet<SymbolRef> {
+        self.r#ref.clone()
+    }
 }
 
 impl SchemaSymbol {
@@ -1154,7 +1233,57 @@ impl SchemaSymbol {
             sema_info: SymbolSemanticInfo::default(),
             mixins: Vec::default(),
             attributes: IndexMap::default(),
+            r#ref: HashSet::default(),
         }
+    }
+
+    pub fn get_parents(&self, data: &SymbolData, parents: &mut Vec<SymbolRef>) {
+        if let Some(parent_schema_ref) = self.parent_schema {
+            if let Some(parent_schema) = data.get_symbol(parent_schema_ref) {
+                if let Some(schema_def) = parent_schema.get_definition() {
+                    if let Some(parent_schema) = data.get_schema_symbol(schema_def) {
+                        // circular reference
+                        if !parents.contains(&schema_def) {
+                            parents.push(schema_def);
+                            parent_schema.get_parents(data, parents);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn get_protocol_and_mixin_attrs(
+        &self,
+        data: &SymbolData,
+        module_info: Option<&ModuleInfo>,
+    ) -> Vec<SymbolRef> {
+        let mut result = vec![];
+        if let Some(for_host) = self.for_host {
+            if let Some(for_host) = data.get_symbol(for_host) {
+                result.append(&mut for_host.get_all_attributes(data, module_info))
+            }
+        }
+        for mixin in self.mixins.iter() {
+            if let Some(mixin) = data.get_symbol(*mixin) {
+                result.append(&mut mixin.get_all_attributes(data, module_info))
+            }
+        }
+
+        result
+    }
+
+    pub fn get_self_attr(
+        &self,
+        data: &SymbolData,
+        module_info: Option<&ModuleInfo>,
+    ) -> Vec<SymbolRef> {
+        let mut result = vec![];
+        for attribute in self.attributes.values() {
+            result.push(*attribute);
+        }
+        result.extend(self.get_protocol_and_mixin_attrs(data, module_info));
+        result
     }
 }
 
@@ -1167,7 +1296,7 @@ pub struct ValueSymbol {
     pub(crate) end: Position,
     pub(crate) owner: Option<SymbolRef>,
     pub(crate) sema_info: SymbolSemanticInfo,
-
+    pub(crate) r#ref: HashSet<SymbolRef>,
     pub(crate) hint: Option<SymbolHint>,
     pub(crate) is_global: bool,
 }
@@ -1274,6 +1403,10 @@ impl Symbol for ValueSymbol {
     fn get_sema_info(&self) -> &Self::SemanticInfo {
         &self.sema_info
     }
+
+    fn get_references(&self) -> HashSet<SymbolRef> {
+        self.r#ref.clone()
+    }
 }
 
 impl ValueSymbol {
@@ -1293,6 +1426,7 @@ impl ValueSymbol {
             sema_info: SymbolSemanticInfo::default(),
             is_global,
             hint: None,
+            r#ref: HashSet::default(),
         }
     }
 }
@@ -1307,6 +1441,8 @@ pub struct AttributeSymbol {
     pub(crate) owner: SymbolRef,
     pub(crate) sema_info: SymbolSemanticInfo,
     pub(crate) is_optional: bool,
+    pub(crate) r#ref: HashSet<SymbolRef>,
+    pub(crate) default_value: Option<String>,
 }
 
 impl Symbol for AttributeSymbol {
@@ -1412,6 +1548,10 @@ impl Symbol for AttributeSymbol {
     fn get_sema_info(&self) -> &Self::SemanticInfo {
         &self.sema_info
     }
+
+    fn get_references(&self) -> HashSet<SymbolRef> {
+        self.r#ref.clone()
+    }
 }
 
 impl AttributeSymbol {
@@ -1421,6 +1561,7 @@ impl AttributeSymbol {
         end: Position,
         owner: SymbolRef,
         is_optional: bool,
+        default_value: Option<String>,
     ) -> Self {
         Self {
             id: None,
@@ -1430,11 +1571,17 @@ impl AttributeSymbol {
             sema_info: SymbolSemanticInfo::default(),
             owner,
             is_optional,
+            r#ref: HashSet::default(),
+            default_value,
         }
     }
 
     pub fn is_optional(&self) -> bool {
         self.is_optional
+    }
+
+    pub fn get_default_value(&self) -> Option<String> {
+        self.default_value.clone()
     }
 }
 #[allow(unused)]
@@ -1446,6 +1593,7 @@ pub struct PackageSymbol {
     pub(crate) start: Position,
     pub(crate) end: Position,
     pub(crate) sema_info: SymbolSemanticInfo,
+    pub(crate) r#ref: HashSet<SymbolRef>,
 }
 
 impl Symbol for PackageSymbol {
@@ -1548,6 +1696,10 @@ impl Symbol for PackageSymbol {
     fn get_sema_info(&self) -> &Self::SemanticInfo {
         &self.sema_info
     }
+
+    fn get_references(&self) -> HashSet<SymbolRef> {
+        self.r#ref.clone()
+    }
 }
 
 impl PackageSymbol {
@@ -1559,6 +1711,7 @@ impl PackageSymbol {
             end,
             sema_info: SymbolSemanticInfo::default(),
             members: IndexMap::default(),
+            r#ref: HashSet::default(),
         }
     }
 }
@@ -1571,6 +1724,7 @@ pub struct TypeAliasSymbol {
     pub(crate) end: Position,
     pub(crate) owner: SymbolRef,
     pub(crate) sema_info: SymbolSemanticInfo,
+    pub(crate) r#ref: HashSet<SymbolRef>,
 }
 
 impl Symbol for TypeAliasSymbol {
@@ -1674,6 +1828,10 @@ impl Symbol for TypeAliasSymbol {
     fn get_sema_info(&self) -> &Self::SemanticInfo {
         &self.sema_info
     }
+
+    fn get_references(&self) -> HashSet<SymbolRef> {
+        self.r#ref.clone()
+    }
 }
 
 impl TypeAliasSymbol {
@@ -1685,6 +1843,7 @@ impl TypeAliasSymbol {
             end,
             sema_info: SymbolSemanticInfo::default(),
             owner,
+            r#ref: HashSet::default(),
         }
     }
 }
@@ -1700,6 +1859,7 @@ pub struct RuleSymbol {
 
     pub(crate) parent_rules: Vec<SymbolRef>,
     pub(crate) for_host: Option<SymbolRef>,
+    pub(crate) r#ref: HashSet<SymbolRef>,
 }
 
 impl Symbol for RuleSymbol {
@@ -1806,6 +1966,10 @@ impl Symbol for RuleSymbol {
     fn get_sema_info(&self) -> &Self::SemanticInfo {
         &self.sema_info
     }
+
+    fn get_references(&self) -> HashSet<SymbolRef> {
+        self.r#ref.clone()
+    }
 }
 
 impl RuleSymbol {
@@ -1819,6 +1983,7 @@ impl RuleSymbol {
             sema_info: SymbolSemanticInfo::default(),
             parent_rules: vec![],
             for_host: None,
+            r#ref: HashSet::default(),
         }
     }
 }
@@ -1834,6 +1999,7 @@ pub struct UnresolvedSymbol {
     pub(crate) sema_info: SymbolSemanticInfo,
     pub(crate) hint: Option<SymbolHint>,
     pub(crate) is_type: bool,
+    pub(crate) r#ref: HashSet<SymbolRef>,
 }
 
 impl Symbol for UnresolvedSymbol {
@@ -1941,6 +2107,10 @@ impl Symbol for UnresolvedSymbol {
         output.push_str("\n}\n}");
         Some(output)
     }
+
+    fn get_references(&self) -> HashSet<SymbolRef> {
+        self.r#ref.clone()
+    }
 }
 
 impl UnresolvedSymbol {
@@ -1961,6 +2131,7 @@ impl UnresolvedSymbol {
             owner,
             hint: None,
             is_type,
+            r#ref: HashSet::default(),
         }
     }
 
@@ -1995,6 +2166,7 @@ pub struct ExpressionSymbol {
 
     pub(crate) sema_info: SymbolSemanticInfo,
     pub(crate) hint: Option<SymbolHint>,
+    pub(crate) r#ref: HashSet<SymbolRef>,
 }
 
 impl Symbol for ExpressionSymbol {
@@ -2097,6 +2269,10 @@ impl Symbol for ExpressionSymbol {
         output.push_str("\n}\n}");
         Some(output)
     }
+
+    fn get_references(&self) -> HashSet<SymbolRef> {
+        self.r#ref.clone()
+    }
 }
 
 impl ExpressionSymbol {
@@ -2109,6 +2285,7 @@ impl ExpressionSymbol {
             sema_info: SymbolSemanticInfo::default(),
             owner,
             hint: None,
+            r#ref: HashSet::default(),
         }
     }
 }
@@ -2120,6 +2297,7 @@ pub struct CommentOrDocSymbol {
     pub(crate) end: Position,
     pub(crate) content: String,
     pub(crate) sema_info: SymbolSemanticInfo,
+    pub(crate) r#ref: HashSet<SymbolRef>,
 }
 
 impl Symbol for CommentOrDocSymbol {
@@ -2208,6 +2386,10 @@ impl Symbol for CommentOrDocSymbol {
     fn full_dump(&self, _data: &Self::SymbolData) -> Option<String> {
         Some(self.simple_dump())
     }
+
+    fn get_references(&self) -> HashSet<SymbolRef> {
+        self.r#ref.clone()
+    }
 }
 
 impl CommentOrDocSymbol {
@@ -2218,6 +2400,7 @@ impl CommentOrDocSymbol {
             end,
             content,
             sema_info: SymbolSemanticInfo::default(),
+            r#ref: HashSet::default(),
         }
     }
 
@@ -2233,6 +2416,7 @@ pub struct DecoratorSymbol {
     pub(crate) end: Position,
     pub(crate) name: String,
     pub(crate) sema_info: SymbolSemanticInfo,
+    pub(crate) r#ref: HashSet<SymbolRef>,
 }
 
 impl Symbol for DecoratorSymbol {
@@ -2321,6 +2505,10 @@ impl Symbol for DecoratorSymbol {
     fn full_dump(&self, _data: &Self::SymbolData) -> Option<String> {
         Some(self.simple_dump())
     }
+
+    fn get_references(&self) -> HashSet<SymbolRef> {
+        self.r#ref.clone()
+    }
 }
 
 impl DecoratorSymbol {
@@ -2331,6 +2519,7 @@ impl DecoratorSymbol {
             end,
             name,
             sema_info: SymbolSemanticInfo::default(),
+            r#ref: HashSet::default(),
         }
     }
 
@@ -2347,8 +2536,8 @@ pub struct FunctionSymbol {
     pub(crate) end: Position,
     pub(crate) owner: Option<SymbolRef>,
     pub(crate) sema_info: SymbolSemanticInfo,
-
     pub(crate) is_global: bool,
+    pub(crate) r#ref: HashSet<SymbolRef>,
 }
 
 impl Symbol for FunctionSymbol {
@@ -2453,6 +2642,10 @@ impl Symbol for FunctionSymbol {
         output.push_str("\n}\n}");
         Some(output)
     }
+
+    fn get_references(&self) -> HashSet<SymbolRef> {
+        self.r#ref.clone()
+    }
 }
 
 impl FunctionSymbol {
@@ -2471,6 +2664,7 @@ impl FunctionSymbol {
             owner,
             sema_info: SymbolSemanticInfo::default(),
             is_global,
+            r#ref: HashSet::default(),
         }
     }
 }

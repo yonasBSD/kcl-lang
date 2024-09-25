@@ -1,5 +1,6 @@
 //! Copyright The KCL Authors. All rights reserved.
 
+extern crate blake3;
 extern crate md5;
 extern crate sha1;
 extern crate sha2;
@@ -7,6 +8,7 @@ extern crate sha2;
 use core::panic;
 use std::{fs::File, io::Read};
 
+use crate::encoding::encode_text;
 use sha2::{Digest, Sha224, Sha256, Sha384, Sha512};
 
 use crate::*;
@@ -22,13 +24,16 @@ type kclvm_value_ref_t = ValueRef;
 pub extern "C" fn kclvm_crypto_md5(
     ctx: *mut kclvm_context_t,
     args: *const kclvm_value_ref_t,
-    _kwargs: *const kclvm_value_ref_t,
+    kwargs: *const kclvm_value_ref_t,
 ) -> *const kclvm_value_ref_t {
     let args = ptr_as_ref(args);
+    let kwargs = ptr_as_ref(kwargs);
     let ctx = mut_ptr_as_ref(ctx);
 
-    if let Some(s) = args.arg_i_str(0, None) {
-        let hex = format!("{:x}", md5::compute(s));
+    if let Some(s) = get_call_arg_str(args, kwargs, 0, Some("value")) {
+        let encoding = get_call_arg_str(args, kwargs, 1, Some("encoding"));
+        let bytes = encode_text(&s, encoding).unwrap();
+        let hex = format!("{:x}", md5::compute(bytes));
         return ValueRef::str(hex.as_ref()).into_raw(ctx);
     }
     panic!("md5() missing 1 required positional argument: 'value'");
@@ -41,13 +46,16 @@ pub extern "C" fn kclvm_crypto_md5(
 pub extern "C" fn kclvm_crypto_sha1(
     ctx: *mut kclvm_context_t,
     args: *const kclvm_value_ref_t,
-    _kwargs: *const kclvm_value_ref_t,
+    kwargs: *const kclvm_value_ref_t,
 ) -> *const kclvm_value_ref_t {
     let args = ptr_as_ref(args);
+    let kwargs = ptr_as_ref(kwargs);
     let ctx = mut_ptr_as_ref(ctx);
 
-    if let Some(s) = args.arg_i_str(0, None) {
-        let hex = sha1::Sha1::from(s).digest().to_string();
+    if let Some(s) = get_call_arg_str(args, kwargs, 0, Some("value")) {
+        let encoding = get_call_arg_str(args, kwargs, 1, Some("encoding"));
+        let bytes = encode_text(&s, encoding).unwrap();
+        let hex = sha1::Sha1::from(bytes).digest().to_string();
         return ValueRef::str(hex.as_ref()).into_raw(ctx);
     }
     panic!("sha1() missing 1 required positional argument: 'value'");
@@ -60,14 +68,17 @@ pub extern "C" fn kclvm_crypto_sha1(
 pub extern "C" fn kclvm_crypto_sha224(
     ctx: *mut kclvm_context_t,
     args: *const kclvm_value_ref_t,
-    _kwargs: *const kclvm_value_ref_t,
+    kwargs: *const kclvm_value_ref_t,
 ) -> *const kclvm_value_ref_t {
     let args = ptr_as_ref(args);
+    let kwargs = ptr_as_ref(kwargs);
     let ctx = mut_ptr_as_ref(ctx);
 
-    if let Some(s) = args.arg_i_str(0, None) {
+    if let Some(s) = get_call_arg_str(args, kwargs, 0, Some("value")) {
+        let encoding = get_call_arg_str(args, kwargs, 1, Some("encoding"));
+        let bytes = encode_text(&s, encoding).unwrap();
         let mut hasher = Sha224::new();
-        hasher.update(&s);
+        hasher.update(bytes);
         let result = hasher.finalize();
 
         let mut hex = String::with_capacity(2 * Sha256::output_size());
@@ -89,13 +100,17 @@ pub extern "C" fn kclvm_crypto_sha224(
 pub extern "C" fn kclvm_crypto_sha256(
     ctx: *mut kclvm_context_t,
     args: *const kclvm_value_ref_t,
-    _kwargs: *const kclvm_value_ref_t,
+    kwargs: *const kclvm_value_ref_t,
 ) -> *const kclvm_value_ref_t {
     let args = ptr_as_ref(args);
+    let kwargs = ptr_as_ref(kwargs);
     let ctx = mut_ptr_as_ref(ctx);
-    if let Some(s) = args.arg_i_str(0, None) {
+
+    if let Some(s) = get_call_arg_str(args, kwargs, 0, Some("value")) {
+        let encoding = get_call_arg_str(args, kwargs, 1, Some("encoding"));
+        let bytes = encode_text(&s, encoding).unwrap();
         let mut hasher = Sha256::new();
-        hasher.update(&s);
+        hasher.update(bytes);
         let result = hasher.finalize();
 
         let mut hex = String::with_capacity(2 * Sha256::output_size());
@@ -117,14 +132,17 @@ pub extern "C" fn kclvm_crypto_sha256(
 pub extern "C" fn kclvm_crypto_sha384(
     ctx: *mut kclvm_context_t,
     args: *const kclvm_value_ref_t,
-    _kwargs: *const kclvm_value_ref_t,
+    kwargs: *const kclvm_value_ref_t,
 ) -> *const kclvm_value_ref_t {
     let args = ptr_as_ref(args);
+    let kwargs = ptr_as_ref(kwargs);
     let ctx = mut_ptr_as_ref(ctx);
 
-    if let Some(s) = args.arg_i_str(0, None) {
+    if let Some(s) = get_call_arg_str(args, kwargs, 0, Some("value")) {
+        let encoding = get_call_arg_str(args, kwargs, 1, Some("encoding"));
+        let bytes = encode_text(&s, encoding).unwrap();
         let mut hasher = Sha384::new();
-        hasher.update(&s);
+        hasher.update(bytes);
         let result = hasher.finalize();
 
         let mut hex = String::with_capacity(2 * Sha256::output_size());
@@ -146,13 +164,17 @@ pub extern "C" fn kclvm_crypto_sha384(
 pub extern "C" fn kclvm_crypto_sha512(
     ctx: *mut kclvm_context_t,
     args: *const kclvm_value_ref_t,
-    _kwargs: *const kclvm_value_ref_t,
+    kwargs: *const kclvm_value_ref_t,
 ) -> *const kclvm_value_ref_t {
     let args = ptr_as_ref(args);
+    let kwargs = ptr_as_ref(kwargs);
     let ctx = mut_ptr_as_ref(ctx);
-    if let Some(s) = args.arg_i_str(0, None) {
+
+    if let Some(s) = get_call_arg_str(args, kwargs, 0, Some("value")) {
+        let encoding = get_call_arg_str(args, kwargs, 1, Some("encoding"));
+        let bytes = encode_text(&s, encoding).unwrap();
         let mut hasher = Sha512::new();
-        hasher.update(&s);
+        hasher.update(bytes);
         let result = hasher.finalize();
 
         let mut hex = String::with_capacity(2 * Sha256::output_size());
@@ -165,6 +187,36 @@ pub extern "C" fn kclvm_crypto_sha512(
         return ValueRef::str(hex.as_ref()).into_raw(ctx);
     }
     panic!("sha512() missing 1 required positional argument: 'value'");
+}
+
+// blake3(value: str, encoding: str = "utf-8") -> str
+
+#[no_mangle]
+#[runtime_fn]
+pub extern "C" fn kclvm_crypto_blake3(
+    ctx: *mut kclvm_context_t,
+    args: *const kclvm_value_ref_t,
+    kwargs: *const kclvm_value_ref_t,
+) -> *const kclvm_value_ref_t {
+    let args = ptr_as_ref(args);
+    let kwargs = ptr_as_ref(kwargs);
+    let ctx = mut_ptr_as_ref(ctx);
+
+    if let Some(s) = get_call_arg_str(args, kwargs, 0, Some("value")) {
+        let encoding = get_call_arg_str(args, kwargs, 1, Some("encoding"));
+        let bytes = encode_text(&s, encoding).unwrap();
+        let hasher = blake3::hash(&bytes);
+
+        let mut hex = String::with_capacity(2 * blake3::OUT_LEN);
+        use std::fmt::Write;
+
+        for byte in hasher.as_bytes() {
+            let _ = write!(&mut hex, "{byte:02x}");
+        }
+
+        return ValueRef::str(hex.as_ref()).into_raw(ctx);
+    }
+    panic!("blake3() missing 1 required positional argument: 'value'");
 }
 
 #[no_mangle]
@@ -183,11 +235,13 @@ pub extern "C" fn kclvm_crypto_uuid(
 pub extern "C" fn kclvm_crypto_filesha256(
     ctx: *mut kclvm_context_t,
     args: *const kclvm_value_ref_t,
-    _kwargs: *const kclvm_value_ref_t,
+    kwargs: *const kclvm_value_ref_t,
 ) -> *const kclvm_value_ref_t {
     let args = ptr_as_ref(args);
+    let kwargs = ptr_as_ref(kwargs);
     let ctx = mut_ptr_as_ref(ctx);
-    if let Some(filepath) = args.arg_i_str(0, None) {
+
+    if let Some(filepath) = get_call_arg_str(args, kwargs, 0, Some("filepath")) {
         // Open the file
         let mut file = File::open(&filepath)
             .unwrap_or_else(|e| panic!("failed to access file '{}': {}", filepath, e));

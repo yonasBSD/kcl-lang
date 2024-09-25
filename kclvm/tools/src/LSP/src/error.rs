@@ -8,8 +8,8 @@ pub(crate) const RETRY_REQUEST: &str = "Retry Request";
 pub(crate) enum LSPError {
     Retry,
     FileIdNotFound(VfsPath),
+    WorkSpaceIsEmpty(VfsPath),
     AnalysisDatabaseNotFound(VfsPath),
-    DocumentVersionNotFound(VfsPath),
 }
 
 impl fmt::Display for LSPError {
@@ -25,8 +25,11 @@ impl fmt::Display for LSPError {
                     "Internal bug: Path {path} analysisDatabase not found, maybe compile failed"
                 )
             }
-            LSPError::DocumentVersionNotFound(path) => {
-                write!(f, "Internal bug: {path} document version not found")
+            LSPError::WorkSpaceIsEmpty(path) => {
+                write!(
+                    f,
+                    "Internal bug: Path {path} does not belong to any workspace"
+                )
             }
         }
     }
